@@ -5,6 +5,29 @@ import { Link } from "react-router-dom";
 import LoadingGrid from "../components/LoadingGrid";
 import { motion } from "framer-motion";
 
+// ✅ FIX: Safe string converter
+function safeString(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'object') {
+    // If it's an object with average/range, format it
+    if (value.average !== undefined) {
+      return value.average;
+    }
+    if (value.range !== undefined) {
+      return value.range;
+    }
+    // Try to get a string representation
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return '';
+    }
+  }
+  return String(value);
+}
+
 export default function CareerDetail() {
   const urlParams = new URLSearchParams(window.location.search);
   const name = urlParams.get("name") || "";
@@ -119,19 +142,22 @@ Return a JSON object with:
   if (error) return <p className="text-center py-20 text-destructive">{error}</p>;
   if (!detail) return <p className="text-center py-20 text-muted-foreground">Career not found</p>;
 
+  // ✅ FIX: Safe InfoRow component
   const InfoRow = ({ icon: Icon, label, value }) => {
-    if (!value) return null;
+    const safeValue = safeString(value);
+    if (!safeValue) return null;
     return (
       <div className="flex items-start gap-3 py-3 border-b border-border/50">
         <Icon className="h-4 w-4 text-primary mt-0.5 shrink-0" />
         <div>
           <p className="text-xs text-muted-foreground">{label}</p>
-          <p className="text-sm font-medium mt-0.5">{value}</p>
+          <p className="text-sm font-medium mt-0.5">{safeValue}</p>
         </div>
       </div>
     );
   };
 
+  // ✅ FIX: Safe TagSection component
   const TagSection = ({ title, items, color = "bg-secondary" }) => {
     if (!items || items.length === 0) return null;
     return (
@@ -139,7 +165,7 @@ Return a JSON object with:
         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{title}</p>
         <div className="flex flex-wrap gap-1.5">
           {items.map((item, i) => (
-            <span key={i} className={`text-xs ${color} px-2.5 py-1 rounded-md font-medium`}>{item}</span>
+            <span key={i} className={`text-xs ${color} px-2.5 py-1 rounded-md font-medium`}>{safeString(item)}</span>
           ))}
         </div>
       </div>
@@ -159,7 +185,7 @@ Return a JSON object with:
           {detail.specialization && <span className="text-xs font-medium bg-accent/10 text-accent px-2.5 py-1 rounded-md">{detail.specialization}</span>}
         </div>
         <h1 className="font-heading text-2xl sm:text-3xl font-bold tracking-tight">{detail.full_title || detail.name}</h1>
-        {detail.quick_summary && <p className="text-muted-foreground mt-2 text-sm sm:text-base max-w-2xl">{detail.quick_summary}</p>}
+        {detail.quick_summary && <p className="text-muted-foreground mt-2 text-sm sm:text-base max-w-2xl">{safeString(detail.quick_summary)}</p>}
       </div>
 
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -172,7 +198,7 @@ Return a JSON object with:
           <div key={i} className="bg-card border border-border rounded-xl p-4">
             <item.icon className="h-4 w-4 text-primary" />
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider mt-2">{item.label}</p>
-            <p className="font-heading font-bold mt-0.5">{item.value}</p>
+            <p className="font-heading font-bold mt-0.5">{safeString(item.value)}</p>
           </div>
         ))}
       </div>
@@ -182,14 +208,14 @@ Return a JSON object with:
           {detail.overview && (
             <div className="bg-card border border-border rounded-xl p-5">
               <h3 className="font-heading font-bold flex items-center gap-2"><BookOpen className="h-4 w-4 text-primary" /> Overview</h3>
-              <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{detail.overview}</p>
+              <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{safeString(detail.overview)}</p>
             </div>
           )}
 
           {detail.day_in_the_life && (
             <div className="bg-card border border-border rounded-xl p-5">
               <h3 className="font-heading font-bold flex items-center gap-2"><Users className="h-4 w-4 text-primary" /> A Day in the Life</h3>
-              <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{detail.day_in_the_life}</p>
+              <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{safeString(detail.day_in_the_life)}</p>
             </div>
           )}
 
@@ -208,7 +234,7 @@ Return a JSON object with:
           {detail.ai_impact_detail && (
             <div className="bg-card border border-border rounded-xl p-5">
               <h3 className="font-heading font-bold flex items-center gap-2"><Zap className="h-4 w-4 text-primary" /> AI Impact Analysis</h3>
-              <p className="text-sm text-muted-foreground mt-2">{detail.ai_impact_detail}</p>
+              <p className="text-sm text-muted-foreground mt-2">{safeString(detail.ai_impact_detail)}</p>
             </div>
           )}
 
@@ -217,7 +243,7 @@ Return a JSON object with:
               <div className="bg-card border border-border rounded-xl p-5">
                 <h3 className="font-heading font-bold text-green-600 text-sm mb-2">✅ Pros</h3>
                 <ul className="space-y-1.5">
-                  {detail.pros.map((p, i) => <li key={i} className="text-sm text-muted-foreground flex items-start gap-2"><span className="text-green-500 mt-1">•</span>{p}</li>)}
+                  {detail.pros.map((p, i) => <li key={i} className="text-sm text-muted-foreground flex items-start gap-2"><span className="text-green-500 mt-1">•</span>{safeString(p)}</li>)}
                 </ul>
               </div>
             )}
@@ -225,7 +251,7 @@ Return a JSON object with:
               <div className="bg-card border border-border rounded-xl p-5">
                 <h3 className="font-heading font-bold text-red-500 text-sm mb-2">⚠️ Cons</h3>
                 <ul className="space-y-1.5">
-                  {detail.cons.map((c, i) => <li key={i} className="text-sm text-muted-foreground flex items-start gap-2"><span className="text-red-400 mt-1">•</span>{c}</li>)}
+                  {detail.cons.map((c, i) => <li key={i} className="text-sm text-muted-foreground flex items-start gap-2"><span className="text-red-400 mt-1">•</span>{safeString(c)}</li>)}
                 </ul>
               </div>
             )}
@@ -253,7 +279,7 @@ Return a JSON object with:
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Top Universities (India)</p>
               <ul className="space-y-1">
                 {detail.top_universities_india.map((u, i) => (
-                  <li key={i} className="text-sm flex items-center gap-2"><GraduationCap className="h-3 w-3 text-primary shrink-0" />{u}</li>
+                  <li key={i} className="text-sm flex items-center gap-2"><GraduationCap className="h-3 w-3 text-primary shrink-0" />{safeString(u)}</li>
                 ))}
               </ul>
             </div>
@@ -264,7 +290,7 @@ Return a JSON object with:
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Top Universities (Global)</p>
               <ul className="space-y-1">
                 {detail.top_universities_global.map((u, i) => (
-                  <li key={i} className="text-sm flex items-center gap-2"><Globe className="h-3 w-3 text-accent shrink-0" />{u}</li>
+                  <li key={i} className="text-sm flex items-center gap-2"><Globe className="h-3 w-3 text-accent shrink-0" />{safeString(u)}</li>
                 ))}
               </ul>
             </div>
@@ -275,7 +301,7 @@ Return a JSON object with:
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Online Resources</p>
               <ul className="space-y-1">
                 {detail.online_resources.map((r, i) => (
-                  <li key={i} className="text-sm text-muted-foreground">• {r}</li>
+                  <li key={i} className="text-sm text-muted-foreground">• {safeString(r)}</li>
                 ))}
               </ul>
             </div>
