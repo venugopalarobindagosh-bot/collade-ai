@@ -41,11 +41,26 @@ export default function Community() {
     setError(null);
     
     try {
-      const prompt = `You are PathFinder AI, a friendly and expert career guidance assistant for high school and college students. Answer this question in a helpful, encouraging, and detailed way:
+      const prompt = `You are PathFinder AI, a friendly and expert career guidance assistant for high school and college students.
+
+Answer this question in a helpful, encouraging, and detailed way:
 
 "${question.trim()}"
 
-Use markdown for formatting. Be conversational and teen-friendly.`;
+You MUST:
+- Use markdown formatting (headings, bullet points, bold)
+- Be conversational and teen-friendly
+- Include specific examples, salary ranges, and education paths
+- Provide actionable next steps
+- NEVER say "varies" or "it depends" without giving specific context
+- If you don't know something, say "I'm not sure, but typically X or Y"
+
+Structure your answer:
+1. Direct answer to the question
+2. Key details (salary, education, skills)
+3. Pros and cons (if applicable)
+4. Next steps for the student
+5. Encouraging closing note`;
 
       const [created, aiRes] = await Promise.all([
         entities.MentorPost.create({
@@ -54,10 +69,7 @@ Use markdown for formatting. Be conversational and teen-friendly.`;
           topic,
           likes: 0
         }),
-        invokeLLM({
-          prompt: prompt,
-          query: prompt
-        })
+        invokeLLM({ prompt: prompt, query: prompt })
       ]);
 
       console.log('[Community] AI Response:', aiRes);
@@ -89,17 +101,28 @@ Use markdown for formatting. Be conversational and teen-friendly.`;
     setAiLoading(idx);
     setError(null);
     try {
-      const prompt = `As PathFinder AI career guide, answer this question for a student:
+      const prompt = `You are PathFinder AI, a friendly and expert career guidance assistant for high school and college students.
+
+Answer this question in a helpful, encouraging, and detailed way:
 
 "${post.question}"
 
-Use markdown formatting. Be detailed and encouraging.`;
+You MUST:
+- Use markdown formatting (headings, bullet points, bold)
+- Be conversational and teen-friendly
+- Include specific examples, salary ranges, and education paths
+- Provide actionable next steps
+- NEVER say "varies" or "it depends" without giving specific context
+- If you don't know something, say "I'm not sure, but typically X or Y"
 
-      const aiRes = await invokeLLM({
-        prompt: prompt,
-        query: prompt
-      });
+Structure your answer:
+1. Direct answer to the question
+2. Key details (salary, education, skills)
+3. Pros and cons (if applicable)
+4. Next steps for the student
+5. Encouraging closing note`;
 
+      const aiRes = await invokeLLM({ prompt: prompt, query: prompt });
       console.log('[Community] Regenerated AI:', aiRes);
 
       const updated = await entities.MentorPost.update(post.id, { ai_answer: aiRes });
@@ -118,14 +141,12 @@ Use markdown formatting. Be detailed and encouraging.`;
     <div className="space-y-6">
       <SectionHeader title="Community & Mentor Chat" subtitle="Ask anything — get AI answers + community wisdom" icon={Users} />
 
-      {/* Error Message */}
       {error && (
         <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4 text-destructive">
           <p className="text-sm">{error}</p>
         </div>
       )}
 
-      {/* Ask form */}
       <div className="bg-card border border-border rounded-xl p-5 space-y-3">
         <div className="grid sm:grid-cols-2 gap-3">
           <input value={authorName} onChange={e => setAuthorName(e.target.value)} placeholder="Your name (optional)"
@@ -149,13 +170,11 @@ Use markdown formatting. Be detailed and encouraging.`;
         </button>
       </div>
 
-      {/* Posts */}
       <div className="space-y-4">
         {posts.length === 0 && <p className="text-center text-muted-foreground text-sm py-10">No questions yet — be the first!</p>}
         {posts.map((post, idx) => (
           <motion.div key={post.id} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.03 }}
             className="bg-card border border-border rounded-xl overflow-hidden">
-            {/* Question */}
             <div className="p-5">
               <div className="flex items-center justify-between gap-3 mb-2">
                 <div className="flex items-center gap-2">
@@ -174,7 +193,6 @@ Use markdown formatting. Be detailed and encouraging.`;
               <p className="font-medium text-sm">{post.question}</p>
             </div>
 
-            {/* AI Answer */}
             {post.ai_answer && (
               <div className="border-t border-border bg-gradient-to-br from-primary/5 to-accent/5 p-5">
                 <div className="flex items-center justify-between mb-2">
@@ -193,7 +211,6 @@ Use markdown formatting. Be detailed and encouraging.`;
               </div>
             )}
 
-            {/* Community Replies */}
             <PostReplies postId={post.id} />
           </motion.div>
         ))}

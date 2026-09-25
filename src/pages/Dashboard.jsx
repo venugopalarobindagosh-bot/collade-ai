@@ -52,9 +52,24 @@ export default function Dashboard() {
     setSearching(true);
     setSearchResult(null);
     try {
-      const res = await invokeLLM({
-        prompt: `You are Collade AI, a career guidance expert for Indian students. Answer this career question concisely and helpfully:\n\n"${search.trim()}"\n\nProvide salary info (India + abroad), required education, top companies, growth prospects. Be direct and specific.`,
-      });
+      const prompt = `You are Collade AI, an expert career guidance assistant for Indian students.
+
+Answer this career question in detail:
+
+"${search.trim()}"
+
+You MUST include:
+1. Direct answer to the question
+2. Salary Range in India: Specific numbers (e.g., ₹5-12 LPA)
+3. Salary Range Globally: Specific numbers (e.g., $60,000-$90,000 USD)
+4. Education Required: Specific degrees or certifications
+5. Top Companies: 3-5 specific companies hiring for this
+6. Growth Prospects: 2-3 sentences on future outlook
+7. AI Disruption Risk: Percentage (0-100%)
+
+RULES: NEVER say "varies". NEVER say "it depends" without specifics. ALWAYS use real numbers and specific names. Be direct, specific, and actionable.`;
+
+      const res = await invokeLLM({ prompt: prompt, query: prompt });
       setSearchResult(typeof res === "string" ? res : JSON.stringify(res, null, 2));
     } catch (err) {
       console.error("[Dashboard] Career search failed:", err);

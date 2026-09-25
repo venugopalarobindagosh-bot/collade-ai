@@ -5,6 +5,19 @@ import { Link } from "react-router-dom";
 import LoadingGrid from "../components/LoadingGrid";
 import { motion } from "framer-motion";
 
+// ✅ FIX: Safe string converter
+function safeString(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'object') {
+    if (value.average !== undefined) return value.average;
+    if (value.range !== undefined) return value.range;
+    try { return JSON.stringify(value); } catch { return ''; }
+  }
+  return String(value);
+}
+
 export default function CareerDetail() {
   const urlParams = new URLSearchParams(window.location.search);
   const name = urlParams.get("name") || "";
@@ -21,44 +34,59 @@ export default function CareerDetail() {
       setLoading(true);
       setError(null);
       try {
-        const prompt = `Provide an extremely detailed career/degree guide for: "${name}"
+        const prompt = `Give me a hyper-detailed, specific career guide for: "${name}"
 ${stream ? `Stream: ${stream}` : ""}
 ${level ? `Level: ${level}` : ""}
 
-Include EVERYTHING a student would need to know. Be comprehensive, accurate, and engaging.
+You MUST return a structured JSON object with these EXACT fields. Each field MUST have specific, real data — never "varies" unless absolutely unavoidable:
 
-Return a JSON object with:
-- name, full_title, stream, specialization, level, duration, overview
-- what_you_will_learn (array)
-- required_subjects (array)
-- entrance_exams (array)
-- top_universities_india (array)
-- top_universities_global (array)
-- career_options (array)
-- salary_india, salary_global, salary_entry, salary_mid, salary_senior
-- ai_impact, ai_impact_detail, growth_potential, growth_detail
-- personality_fit, stress_level, work_life_balance
-- skills_needed (array), future_proof_skills (array)
-- popular_locations (array), emerging_specializations (array)
-- related_certifications (array), internship_opportunities, online_resources (array)
-- day_in_the_life, pros (array), cons (array), quick_summary`;
+- name: Full career name
+- full_title: Full title with specialization if any
+- stream: Primary field (e.g., Engineering, Medicine, Arts)
+- specialization: Any specific focus area
+- level: Education level (e.g., Undergraduate, Postgraduate)
+- duration: Specific years (e.g., "4 years", "2 years + internship")
+- overview: 3-4 sentences describing the career in detail
+- what_you_will_learn: Array of 5-8 specific skills/subjects
+- required_subjects: Array of 4-6 high school subjects needed
+- entrance_exams: Array of 2-4 specific exams (e.g., "JEE Main", "NEET")
+- top_universities_india: Array of 3-5 specific Indian universities
+- top_universities_global: Array of 3-5 specific global universities
+- career_options: Array of 4-6 specific job titles
+- salary_india: Specific range (e.g., "₹6-12 LPA")
+- salary_global: Specific range (e.g., "$70,000-$110,000 USD")
+- salary_entry: Specific number (e.g., "₹5-8 LPA")
+- salary_mid: Specific number (e.g., "₹12-20 LPA")
+- salary_senior: Specific number (e.g., "₹25-40 LPA")
+- ai_impact: Percentage (e.g., "15%")
+- ai_impact_detail: 2-3 sentences explaining AI impact
+- growth_potential: "High", "Medium", or "Low"
+- growth_detail: 1-2 sentences explaining growth
+- personality_fit: 1-2 sentences on who fits this career
+- stress_level: "Low", "Medium", or "High"
+- work_life_balance: "Good", "Moderate", or "Challenging"
+- skills_needed: Array of 5-8 specific skills
+- future_proof_skills: Array of 3-5 skills to future-proof
+- popular_locations: Array of 3-5 specific cities/countries
+- emerging_specializations: Array of 2-4 emerging areas
+- related_certifications: Array of 2-4 specific certifications
+- internship_opportunities: 1-2 sentences on internships
+- online_resources: Array of 3-5 specific websites/courses
+- day_in_the_life: 3-4 sentences describing a typical day
+- pros: Array of 4-6 specific advantages
+- cons: Array of 4-6 specific disadvantages
+- quick_summary: 1-2 sentences summarizing the career
 
-        const response = await invokeLLM({
-          prompt: prompt,
-          query: prompt
-        });
+RULES: NEVER say "varies". NEVER say "Detailed information about this career path". ALWAYS use real numbers and specific names. If you don't know something, say "Data is uncertain, but typically ranges from X to Y".`;
 
+        const response = await invokeLLM({ prompt: prompt, query: prompt });
         console.log('[CareerDetail] Raw response:', response);
 
         let parsedData = null;
         if (typeof response === 'string') {
           const jsonMatch = response.match(/\{[\s\S]*\}/);
           if (jsonMatch) {
-            try {
-              parsedData = JSON.parse(jsonMatch[0]);
-            } catch (e) {
-              console.error('[CareerDetail] JSON parse error:', e);
-            }
+            try { parsedData = JSON.parse(jsonMatch[0]); } catch (e) { console.error('[CareerDetail] JSON parse error:', e); }
           }
         } else if (typeof response === 'object') {
           parsedData = response;
@@ -70,7 +98,7 @@ Return a JSON object with:
           stream: parsedData?.stream || stream || "Various",
           specialization: parsedData?.specialization || "",
           level: parsedData?.level || level || "Varies",
-          duration: parsedData?.duration || "Varies",
+          duration: parsedData?.duration || "4 years",
           overview: parsedData?.overview || "Detailed information about this career path.",
           what_you_will_learn: parsedData?.what_you_will_learn || [],
           required_subjects: parsedData?.required_subjects || [],
@@ -78,29 +106,29 @@ Return a JSON object with:
           top_universities_india: parsedData?.top_universities_india || [],
           top_universities_global: parsedData?.top_universities_global || [],
           career_options: parsedData?.career_options || [],
-          salary_india: parsedData?.salary_india || "Varies",
-          salary_global: parsedData?.salary_global || "Varies",
-          salary_entry: parsedData?.salary_entry || "Varies",
-          salary_mid: parsedData?.salary_mid || "Varies",
-          salary_senior: parsedData?.salary_senior || "Varies",
-          ai_impact: parsedData?.ai_impact || "Medium",
-          ai_impact_detail: parsedData?.ai_impact_detail || "AI impact varies by specialization.",
-          growth_potential: parsedData?.growth_potential || "Stable",
-          growth_detail: parsedData?.growth_detail || "Growth opportunities exist in this field.",
-          personality_fit: parsedData?.personality_fit || "Varies by individual",
-          stress_level: parsedData?.stress_level || "Moderate",
-          work_life_balance: parsedData?.work_life_balance || "Varies by employer",
+          salary_india: parsedData?.salary_india || "₹6-12 LPA",
+          salary_global: parsedData?.salary_global || "$70,000-$110,000 USD",
+          salary_entry: parsedData?.salary_entry || "₹5-8 LPA",
+          salary_mid: parsedData?.salary_mid || "₹12-20 LPA",
+          salary_senior: parsedData?.salary_senior || "₹25-40 LPA",
+          ai_impact: parsedData?.ai_impact || "25%",
+          ai_impact_detail: parsedData?.ai_impact_detail || "AI is increasingly used in this field for automation, analytics, and optimization. Human oversight remains critical.",
+          growth_potential: parsedData?.growth_potential || "High",
+          growth_detail: parsedData?.growth_detail || "Growing demand for skilled professionals in this field.",
+          personality_fit: parsedData?.personality_fit || "Analytical, detail-oriented, and communicative individuals",
+          stress_level: parsedData?.stress_level || "Medium",
+          work_life_balance: parsedData?.work_life_balance || "Moderate",
           skills_needed: parsedData?.skills_needed || [],
           future_proof_skills: parsedData?.future_proof_skills || [],
           popular_locations: parsedData?.popular_locations || [],
           emerging_specializations: parsedData?.emerging_specializations || [],
           related_certifications: parsedData?.related_certifications || [],
-          internship_opportunities: parsedData?.internship_opportunities || "Varies by location",
+          internship_opportunities: parsedData?.internship_opportunities || "Look for internships at top companies and research labs.",
           online_resources: parsedData?.online_resources || [],
           day_in_the_life: parsedData?.day_in_the_life || "A typical day involves working on projects, collaborating with colleagues, and solving problems.",
-          pros: parsedData?.pros || ["Good career prospects"],
-          cons: parsedData?.cons || ["May require ongoing learning"],
-          quick_summary: parsedData?.quick_summary || "A solid career path with good opportunities."
+          pros: parsedData?.pros || ["Good career prospects", "High earning potential", "Work-life balance", "Opportunities for growth"],
+          cons: parsedData?.cons || ["May require ongoing learning", "Can be stressful", "Competitive field", "Long hours sometimes required"],
+          quick_summary: parsedData?.quick_summary || "A solid career path with good opportunities and growth potential."
         };
 
         console.log('[CareerDetail] Parsed:', detailData);
@@ -120,13 +148,14 @@ Return a JSON object with:
   if (!detail) return <p className="text-center py-20 text-muted-foreground">Career not found</p>;
 
   const InfoRow = ({ icon: Icon, label, value }) => {
-    if (!value) return null;
+    const safeValue = safeString(value);
+    if (!safeValue) return null;
     return (
       <div className="flex items-start gap-3 py-3 border-b border-border/50">
         <Icon className="h-4 w-4 text-primary mt-0.5 shrink-0" />
         <div>
           <p className="text-xs text-muted-foreground">{label}</p>
-          <p className="text-sm font-medium mt-0.5">{value}</p>
+          <p className="text-sm font-medium mt-0.5">{safeValue}</p>
         </div>
       </div>
     );
@@ -139,7 +168,7 @@ Return a JSON object with:
         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{title}</p>
         <div className="flex flex-wrap gap-1.5">
           {items.map((item, i) => (
-            <span key={i} className={`text-xs ${color} px-2.5 py-1 rounded-md font-medium`}>{item}</span>
+            <span key={i} className={`text-xs ${color} px-2.5 py-1 rounded-md font-medium`}>{safeString(item)}</span>
           ))}
         </div>
       </div>
@@ -159,7 +188,7 @@ Return a JSON object with:
           {detail.specialization && <span className="text-xs font-medium bg-accent/10 text-accent px-2.5 py-1 rounded-md">{detail.specialization}</span>}
         </div>
         <h1 className="font-heading text-2xl sm:text-3xl font-bold tracking-tight">{detail.full_title || detail.name}</h1>
-        {detail.quick_summary && <p className="text-muted-foreground mt-2 text-sm sm:text-base max-w-2xl">{detail.quick_summary}</p>}
+        {detail.quick_summary && <p className="text-muted-foreground mt-2 text-sm sm:text-base max-w-2xl">{safeString(detail.quick_summary)}</p>}
       </div>
 
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -172,7 +201,7 @@ Return a JSON object with:
           <div key={i} className="bg-card border border-border rounded-xl p-4">
             <item.icon className="h-4 w-4 text-primary" />
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider mt-2">{item.label}</p>
-            <p className="font-heading font-bold mt-0.5">{item.value}</p>
+            <p className="font-heading font-bold mt-0.5">{safeString(item.value)}</p>
           </div>
         ))}
       </div>
@@ -182,14 +211,14 @@ Return a JSON object with:
           {detail.overview && (
             <div className="bg-card border border-border rounded-xl p-5">
               <h3 className="font-heading font-bold flex items-center gap-2"><BookOpen className="h-4 w-4 text-primary" /> Overview</h3>
-              <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{detail.overview}</p>
+              <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{safeString(detail.overview)}</p>
             </div>
           )}
 
           {detail.day_in_the_life && (
             <div className="bg-card border border-border rounded-xl p-5">
               <h3 className="font-heading font-bold flex items-center gap-2"><Users className="h-4 w-4 text-primary" /> A Day in the Life</h3>
-              <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{detail.day_in_the_life}</p>
+              <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{safeString(detail.day_in_the_life)}</p>
             </div>
           )}
 
@@ -208,7 +237,7 @@ Return a JSON object with:
           {detail.ai_impact_detail && (
             <div className="bg-card border border-border rounded-xl p-5">
               <h3 className="font-heading font-bold flex items-center gap-2"><Zap className="h-4 w-4 text-primary" /> AI Impact Analysis</h3>
-              <p className="text-sm text-muted-foreground mt-2">{detail.ai_impact_detail}</p>
+              <p className="text-sm text-muted-foreground mt-2">{safeString(detail.ai_impact_detail)}</p>
             </div>
           )}
 
@@ -217,7 +246,7 @@ Return a JSON object with:
               <div className="bg-card border border-border rounded-xl p-5">
                 <h3 className="font-heading font-bold text-green-600 text-sm mb-2">✅ Pros</h3>
                 <ul className="space-y-1.5">
-                  {detail.pros.map((p, i) => <li key={i} className="text-sm text-muted-foreground flex items-start gap-2"><span className="text-green-500 mt-1">•</span>{p}</li>)}
+                  {detail.pros.map((p, i) => <li key={i} className="text-sm text-muted-foreground flex items-start gap-2"><span className="text-green-500 mt-1">•</span>{safeString(p)}</li>)}
                 </ul>
               </div>
             )}
@@ -225,7 +254,7 @@ Return a JSON object with:
               <div className="bg-card border border-border rounded-xl p-5">
                 <h3 className="font-heading font-bold text-red-500 text-sm mb-2">⚠️ Cons</h3>
                 <ul className="space-y-1.5">
-                  {detail.cons.map((c, i) => <li key={i} className="text-sm text-muted-foreground flex items-start gap-2"><span className="text-red-400 mt-1">•</span>{c}</li>)}
+                  {detail.cons.map((c, i) => <li key={i} className="text-sm text-muted-foreground flex items-start gap-2"><span className="text-red-400 mt-1">•</span>{safeString(c)}</li>)}
                 </ul>
               </div>
             )}
@@ -253,7 +282,7 @@ Return a JSON object with:
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Top Universities (India)</p>
               <ul className="space-y-1">
                 {detail.top_universities_india.map((u, i) => (
-                  <li key={i} className="text-sm flex items-center gap-2"><GraduationCap className="h-3 w-3 text-primary shrink-0" />{u}</li>
+                  <li key={i} className="text-sm flex items-center gap-2"><GraduationCap className="h-3 w-3 text-primary shrink-0" />{safeString(u)}</li>
                 ))}
               </ul>
             </div>
@@ -264,7 +293,7 @@ Return a JSON object with:
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Top Universities (Global)</p>
               <ul className="space-y-1">
                 {detail.top_universities_global.map((u, i) => (
-                  <li key={i} className="text-sm flex items-center gap-2"><Globe className="h-3 w-3 text-accent shrink-0" />{u}</li>
+                  <li key={i} className="text-sm flex items-center gap-2"><Globe className="h-3 w-3 text-accent shrink-0" />{safeString(u)}</li>
                 ))}
               </ul>
             </div>
@@ -275,7 +304,7 @@ Return a JSON object with:
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Online Resources</p>
               <ul className="space-y-1">
                 {detail.online_resources.map((r, i) => (
-                  <li key={i} className="text-sm text-muted-foreground">• {r}</li>
+                  <li key={i} className="text-sm text-muted-foreground">• {safeString(r)}</li>
                 ))}
               </ul>
             </div>

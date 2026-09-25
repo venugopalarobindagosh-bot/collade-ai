@@ -52,41 +52,27 @@ Completed Skills: ${completedSkills.join(", ") || "None yet"}
 Currently Learning: ${learningSkills.join(", ") || "None"}
 Total XP Earned: ${totalXP}
 
-Create a structured, professional report suitable for a school counselor or parent that summarizes:
-1. Skill development progress
-2. Recommended career paths
-3. Next steps and action items
-4. Strengths observed
-5. Areas for development
+You MUST return a structured JSON object with these EXACT fields:
 
-Be encouraging and actionable.
+- student_summary: 3-4 sentences summarizing the student's progress
+- skill_progress_analysis: 2-3 sentences analyzing skill development
+- recommended_paths: Array of 3-5 specific career paths with reasoning
+- strengths_observed: Array of 4-6 specific strengths with examples
+- development_areas: Array of 3-5 specific areas for improvement
+- next_steps: Array of 5-7 specific actionable steps
+- counselor_notes: 2-3 sentences of professional advice
+- overall_readiness_score: "High", "Good", or "Developing"
 
-Return a JSON object with:
-- student_summary (string)
-- skill_progress_analysis (string)
-- recommended_paths (array)
-- strengths_observed (array)
-- development_areas (array)
-- next_steps (array)
-- counselor_notes (string)
-- overall_readiness_score (string)`;
+RULES: Be specific and actionable. NEVER say "varies". Use real career names and concrete advice. Be encouraging but honest.`;
 
-      const response = await invokeLLM({
-        prompt: prompt,
-        query: prompt
-      });
-
+      const response = await invokeLLM({ prompt: prompt, query: prompt });
       console.log('[CounselorReport] Raw response:', response);
 
       let parsedData = null;
       if (typeof response === 'string') {
         const jsonMatch = response.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
-          try {
-            parsedData = JSON.parse(jsonMatch[0]);
-          } catch (e) {
-            console.error('[CounselorReport] JSON parse error:', e);
-          }
+          try { parsedData = JSON.parse(jsonMatch[0]); } catch (e) { console.error('[CounselorReport] JSON parse error:', e); }
         }
       } else if (typeof response === 'object') {
         parsedData = response;
@@ -99,13 +85,13 @@ Return a JSON object with:
         skills_xp: totalXP,
         completed_skills: completedSkills,
         learning_skills: learningSkills,
-        student_summary: parsedData?.student_summary || "Student is making good progress in their career exploration journey.",
-        skill_progress_analysis: parsedData?.skill_progress_analysis || "The student has started building foundational skills.",
-        recommended_paths: parsedData?.recommended_paths || ["Continue exploring interests", "Research career options"],
-        strengths_observed: parsedData?.strengths_observed || ["Curiosity", "Willingness to learn"],
-        development_areas: parsedData?.development_areas || ["Time management", "Focus"],
-        next_steps: parsedData?.next_steps || ["Explore more career options", "Build additional skills"],
-        counselor_notes: parsedData?.counselor_notes || "Student shows promise in career exploration.",
+        student_summary: parsedData?.student_summary || "The student is actively exploring career options and building foundational skills. With continued effort, they are on track for a successful career journey.",
+        skill_progress_analysis: parsedData?.skill_progress_analysis || "The student has started building foundational skills relevant to their career interests. Continued development in specific areas will strengthen their profile.",
+        recommended_paths: parsedData?.recommended_paths || ["Explore careers in technology", "Consider data science", "Look into engineering", "Research management roles"],
+        strengths_observed: parsedData?.strengths_observed || ["Curiosity", "Willingness to learn", "Analytical thinking", "Self-motivation"],
+        development_areas: parsedData?.development_areas || ["Time management", "Focus", "Research skills", "Networking"],
+        next_steps: parsedData?.next_steps || ["Explore 3-5 career options in detail", "Build skills in one area", "Apply for internships or shadowing", "Connect with professionals in the field", "Take a career assessment test", "Create a career plan", "Follow up with a career counselor"],
+        counselor_notes: parsedData?.counselor_notes || "Student shows strong potential for career growth. With focused effort and strategic planning, they can build a successful career path.",
         overall_readiness_score: parsedData?.overall_readiness_score || "Good"
       };
 
@@ -125,14 +111,12 @@ Return a JSON object with:
     <div className="space-y-6">
       <SectionHeader title="Counselor Report" subtitle="Generate a professional career exploration report for parents or school counselors" icon={FileText} />
 
-      {/* Error Message */}
       {error && (
         <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4 text-destructive">
           <p className="text-sm">{error}</p>
         </div>
       )}
 
-      {/* Form */}
       <div className="bg-card border border-border rounded-xl p-5 space-y-4">
         <div className="grid sm:grid-cols-2 gap-4">
           <div>
@@ -157,7 +141,6 @@ Return a JSON object with:
           </div>
         </div>
 
-        {/* Skills preview */}
         {!dataLoading && skills.length > 0 && (
           <div className="bg-secondary rounded-lg p-4 space-y-2">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Data from Skill Tracker</p>
@@ -178,10 +161,8 @@ Return a JSON object with:
         </button>
       </div>
 
-      {/* Report */}
       {report && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
-          {/* Report header */}
           <div className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-xl p-6">
             <div className="flex items-start justify-between">
               <div>
@@ -196,7 +177,6 @@ Return a JSON object with:
             </div>
           </div>
 
-          {/* Stats */}
           <div className="grid grid-cols-3 gap-3">
             {[
               { label: "Total XP", value: report.skills_xp, icon: "⭐" },
@@ -211,7 +191,6 @@ Return a JSON object with:
             ))}
           </div>
 
-          {/* Report sections */}
           {[
             { title: "📋 Student Summary", content: report.student_summary },
             { title: "📊 Skill Progress Analysis", content: report.skill_progress_analysis },

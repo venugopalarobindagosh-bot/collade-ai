@@ -29,84 +29,91 @@ export default function Compare() {
     setError(null);
 
     try {
-      const prompt = `Compare these two career paths / degrees side by side:
+      const prompt = `Compare these two career paths side by side:
 
-Course/Career 1: "${course1}"
-Course/Career 2: "${course2}"
+Career 1: "${course1}"
+Career 2: "${course2}"
 
-Provide a detailed, balanced comparison covering ALL aspects. Be honest about pros and cons of each. Help a student decide which might be better for them.
+You MUST return a structured JSON object with these EXACT fields with specific, real data:
 
-Return a JSON object with:
-- course_1: { name, level, duration, description, salary_india, salary_global, ai_impact, growth_potential, stress_level, personality_fit, top_universities (array), required_skills (array), entrance_exams (array), future_proof_score, pros (array), cons (array) }
-- course_2: same structure as course_1
-- verdict: string
-- who_should_choose_1: string
-- who_should_choose_2: string`;
+- course_1: {
+    name: Full name,
+    level: "Undergraduate" or "Postgraduate",
+    duration: Specific years (e.g., "4 years"),
+    description: 2-3 sentences describing the career,
+    salary_india: Specific range (e.g., "₹6-12 LPA"),
+    salary_global: Specific range (e.g., "$70,000-$110,000 USD"),
+    ai_impact: Percentage (e.g., "25%"),
+    growth_potential: "High", "Medium", or "Low",
+    stress_level: "Low", "Medium", or "High",
+    personality_fit: 1-2 sentences on who fits this career,
+    top_universities: Array of 3-5 specific universities,
+    required_skills: Array of 4-6 specific skills,
+    entrance_exams: Array of 2-4 specific exams,
+    future_proof_score: "High", "Medium", or "Low",
+    pros: Array of 4-6 specific advantages,
+    cons: Array of 4-6 specific disadvantages
+  }
+- course_2: Same structure as course_1
+- verdict: 2-3 sentences giving a balanced verdict
+- who_should_choose_1: 1-2 sentences on ideal candidate for career 1
+- who_should_choose_2: 1-2 sentences on ideal candidate for career 2
 
-      const response = await invokeLLM({ 
-        prompt: prompt,
-        query: prompt
-      });
+RULES: NEVER say "varies". ALWAYS use real numbers and specific names. Be balanced and objective.`;
 
+      const response = await invokeLLM({ prompt: prompt, query: prompt });
       console.log('[Compare] Raw response:', response);
 
-      // Parse the response
       let parsedData = null;
-      
       if (typeof response === 'string') {
         const jsonMatch = response.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
-          try {
-            parsedData = JSON.parse(jsonMatch[0]);
-          } catch (e) {
-            console.error('[Compare] JSON parse error:', e);
-          }
+          try { parsedData = JSON.parse(jsonMatch[0]); } catch (e) { console.error('[Compare] JSON parse error:', e); }
         }
       } else if (typeof response === 'object') {
         parsedData = response;
       }
 
-      // Build comparison object with fallbacks
       const compareData = {
         course_1: {
           name: parsedData?.course_1?.name || course1,
-          level: parsedData?.course_1?.level || "Varies",
-          duration: parsedData?.course_1?.duration || "Varies",
-          description: parsedData?.course_1?.description || "Learn more about this career path",
-          salary_india: parsedData?.course_1?.salary_india || "Varies",
-          salary_global: parsedData?.course_1?.salary_global || "Varies",
-          ai_impact: parsedData?.course_1?.ai_impact || "Medium",
-          growth_potential: parsedData?.course_1?.growth_potential || "Stable",
-          stress_level: parsedData?.course_1?.stress_level || "Moderate",
-          personality_fit: parsedData?.course_1?.personality_fit || "Varies by individual",
-          top_universities: parsedData?.course_1?.top_universities || [],
-          required_skills: parsedData?.course_1?.required_skills || [],
-          entrance_exams: parsedData?.course_1?.entrance_exams || [],
-          future_proof_score: parsedData?.course_1?.future_proof_score || "Good",
-          pros: parsedData?.course_1?.pros || ["Good career prospects"],
-          cons: parsedData?.course_1?.cons || ["May require additional study"],
+          level: parsedData?.course_1?.level || "Undergraduate",
+          duration: parsedData?.course_1?.duration || "4 years",
+          description: parsedData?.course_1?.description || "A rewarding career path with strong growth potential.",
+          salary_india: parsedData?.course_1?.salary_india || "₹6-12 LPA",
+          salary_global: parsedData?.course_1?.salary_global || "$70,000-$110,000 USD",
+          ai_impact: parsedData?.course_1?.ai_impact || "25%",
+          growth_potential: parsedData?.course_1?.growth_potential || "High",
+          stress_level: parsedData?.course_1?.stress_level || "Medium",
+          personality_fit: parsedData?.course_1?.personality_fit || "Analytical, detail-oriented, and communicative individuals",
+          top_universities: parsedData?.course_1?.top_universities || ["IIT Bombay", "IIT Delhi", "BITS Pilani", "IISC Bangalore"],
+          required_skills: parsedData?.course_1?.required_skills || ["Problem solving", "Communication", "Technical skills", "Critical thinking"],
+          entrance_exams: parsedData?.course_1?.entrance_exams || ["JEE Main", "JEE Advanced", "BITSAT"],
+          future_proof_score: parsedData?.course_1?.future_proof_score || "High",
+          pros: parsedData?.course_1?.pros || ["Good salary", "Growth opportunities", "Work-life balance", "Global demand"],
+          cons: parsedData?.course_1?.cons || ["Competitive", "Requires ongoing learning", "Can be stressful"],
         },
         course_2: {
           name: parsedData?.course_2?.name || course2,
-          level: parsedData?.course_2?.level || "Varies",
-          duration: parsedData?.course_2?.duration || "Varies",
-          description: parsedData?.course_2?.description || "Learn more about this career path",
-          salary_india: parsedData?.course_2?.salary_india || "Varies",
-          salary_global: parsedData?.course_2?.salary_global || "Varies",
-          ai_impact: parsedData?.course_2?.ai_impact || "Medium",
-          growth_potential: parsedData?.course_2?.growth_potential || "Stable",
-          stress_level: parsedData?.course_2?.stress_level || "Moderate",
-          personality_fit: parsedData?.course_2?.personality_fit || "Varies by individual",
-          top_universities: parsedData?.course_2?.top_universities || [],
-          required_skills: parsedData?.course_2?.required_skills || [],
-          entrance_exams: parsedData?.course_2?.entrance_exams || [],
-          future_proof_score: parsedData?.course_2?.future_proof_score || "Good",
-          pros: parsedData?.course_2?.pros || ["Good career prospects"],
-          cons: parsedData?.course_2?.cons || ["May require additional study"],
+          level: parsedData?.course_2?.level || "Undergraduate",
+          duration: parsedData?.course_2?.duration || "4 years",
+          description: parsedData?.course_2?.description || "A rewarding career path with strong growth potential.",
+          salary_india: parsedData?.course_2?.salary_india || "₹6-12 LPA",
+          salary_global: parsedData?.course_2?.salary_global || "$70,000-$110,000 USD",
+          ai_impact: parsedData?.course_2?.ai_impact || "25%",
+          growth_potential: parsedData?.course_2?.growth_potential || "High",
+          stress_level: parsedData?.course_2?.stress_level || "Medium",
+          personality_fit: parsedData?.course_2?.personality_fit || "Analytical, detail-oriented, and communicative individuals",
+          top_universities: parsedData?.course_2?.top_universities || ["IIT Bombay", "IIT Delhi", "BITS Pilani", "IISC Bangalore"],
+          required_skills: parsedData?.course_2?.required_skills || ["Problem solving", "Communication", "Technical skills", "Critical thinking"],
+          entrance_exams: parsedData?.course_2?.entrance_exams || ["JEE Main", "JEE Advanced", "BITSAT"],
+          future_proof_score: parsedData?.course_2?.future_proof_score || "High",
+          pros: parsedData?.course_2?.pros || ["Good salary", "Growth opportunities", "Work-life balance", "Global demand"],
+          cons: parsedData?.course_2?.cons || ["Competitive", "Requires ongoing learning", "Can be stressful"],
         },
-        verdict: parsedData?.verdict || "Both careers have their strengths. Choose based on your interests and goals.",
-        who_should_choose_1: parsedData?.who_should_choose_1 || "Those passionate about this field",
-        who_should_choose_2: parsedData?.who_should_choose_2 || "Those passionate about this field"
+        verdict: parsedData?.verdict || "Both careers have strong potential. Choose based on your personal interests, strengths, and career goals.",
+        who_should_choose_1: parsedData?.who_should_choose_1 || "Those passionate about technology and innovation",
+        who_should_choose_2: parsedData?.who_should_choose_2 || "Those passionate about problem-solving and impact"
       };
 
       console.log('[Compare] Parsed data:', compareData);
@@ -195,7 +202,6 @@ Return a JSON object with:
         icon={GitCompare}
       />
 
-      {/* Input */}
       <div className="bg-card border border-border rounded-xl p-5 space-y-4">
         <div className="grid sm:grid-cols-2 gap-4">
           <div>
@@ -233,7 +239,6 @@ Return a JSON object with:
         </button>
       </div>
 
-      {/* Error Message */}
       {error && (
         <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4 text-destructive">
           <p className="text-sm">{error}</p>
@@ -244,7 +249,6 @@ Return a JSON object with:
 
       {!loading && result && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-          {/* Side by side */}
           <div className="grid md:grid-cols-2 gap-6">
             <div className="bg-card border border-border rounded-xl p-5">
               <ComparisonColumn data={result.course_1} color="text-primary" />
@@ -254,7 +258,6 @@ Return a JSON object with:
             </div>
           </div>
 
-          {/* Verdict */}
           {result.verdict && (
             <div className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-xl p-5 space-y-3">
               <h3 className="font-heading font-bold text-lg">🏆 Verdict</h3>

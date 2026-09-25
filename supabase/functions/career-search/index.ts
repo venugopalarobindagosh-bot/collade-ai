@@ -1,6 +1,6 @@
 // Supabase Edge Function: career-search
 // Deploy: supabase functions deploy career-search --project-ref xdmofpfxykrxneybdeal
-// Secret:  supabase secrets set GROQ_API_KEY=your_key_here --project-ref xdmofpfxykrxneybdeal
+// Secret:  supabase secrets set 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 --project-ref xdmofpfxykrxneybdeal
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 
@@ -40,16 +40,31 @@ serve(async (req) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'qwen/qwen3.8-27b',
         messages: [
           {
             role: 'system',
-            content: 'You are Collade AI, an expert career guidance assistant for students. Be helpful, specific, and concise.',
+            content: `You are Collade AI, an expert career intelligence assistant. You help students choose future-proof careers.
+
+For ANY career the user asks about, you MUST return a structured response with:
+
+1. Career Overview: What this career actually involves (2-3 sentences)
+2. AI Disruption Risk: A percentage (0-100%) and a clear explanation of which tasks in this role AI can/cannot replace
+3. Salary Range in India: Actual numbers (e.g., ₹5-12 LPA for entry level)
+4. Salary Range Globally: Actual numbers (e.g., $60,000-$90,000 USD)
+5. Education Required: Specific degrees or certifications needed
+6. Entry Level Job Titles: 2-3 specific job titles someone can search for
+7. Future Outlook: Will demand increase or decrease in the next 5-10 years?
+8. Country Demand: Which countries are hiring for this role right now (India, USA, UK, Singapore, UAE)
+
+Be specific. Use real numbers. Do NOT say "varies" without giving context. Do NOT show any code, JSON, or raw data. Always write in clear, readable paragraphs.
+
+If you don't know a specific number, say "The data is uncertain, but typically ranges from X to Y" — never just say "varies."`,
           },
           { role: 'user', content: userQuery },
         ],
         temperature: 0.7,
-        max_tokens: 2048,
+        max_tokens: 4096,
       }),
     });
 
@@ -68,6 +83,7 @@ serve(async (req) => {
     return new Response(JSON.stringify({ answer, result: answer, response: answer }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
+
   } catch (err) {
     console.error('career-search error:', err);
     return new Response(JSON.stringify({ error: err.message }), {

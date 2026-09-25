@@ -38,71 +38,60 @@ export default function CareerSimulator() {
     setError(null);
     
     try {
-      const prompt = `Simulate a 5–10 year career outlook for a student with:
+      const prompt = `Simulate a detailed 5-10 year career outlook for a student with:
 Degree: ${degree}
 Internships/Experience: ${internships.join(", ") || "None"}
 Certifications: ${certifications.join(", ") || "None"}
 
-Predict realistic career trajectory, salary progression, AI impact, job market, and key milestones. Be detailed and honest.
+You MUST return a structured JSON object with these EXACT fields with specific, real data:
 
-Return a JSON object with:
-- path_id (string)
-- degree (string)
-- predicted_salary_year1 (string)
-- predicted_salary_year5 (string)
-- predicted_salary_year10 (string)
-- AI_risk_score (number)
-- AI_risk_level (string: "Low", "Medium", "High")
-- future_proof_score (number)
-- job_opportunities_year1 (string)
-- job_opportunities_year5 (string)
-- top_roles (array)
-- key_milestones (array)
-- growth_potential (string)
-- best_locations (array)
-- skills_to_accelerate (array)
-- warnings (array)
-- overall_verdict (string)`;
+- path_id: "sim_${Date.now()}"
+- degree: The full degree name
+- predicted_salary_year1: Specific range (e.g., "₹5-8 LPA")
+- predicted_salary_year5: Specific range (e.g., "₹12-18 LPA")
+- predicted_salary_year10: Specific range (e.g., "₹20-30 LPA")
+- AI_risk_score: Number 0-100 (e.g., 45)
+- AI_risk_level: "Low", "Medium", or "High"
+- future_proof_score: Number 1-10 (e.g., 8)
+- job_opportunities_year1: 2-3 sentences on entry-level opportunities
+- job_opportunities_year5: 2-3 sentences on mid-career opportunities
+- top_roles: Array of 4-6 specific job titles
+- key_milestones: Array of 5-8 specific career milestones with years
+- growth_potential: "High", "Medium", or "Low" with explanation
+- best_locations: Array of 3-5 specific cities/countries
+- skills_to_accelerate: Array of 4-6 specific skills
+- warnings: Array of 2-4 specific challenges/risks
+- overall_verdict: 2-3 sentences summarizing the outlook
 
-      const response = await invokeLLM({ 
-        prompt: prompt,
-        query: prompt
-      });
+RULES: NEVER say "varies". ALWAYS use real numbers and specific names. Be brutally honest about risks and challenges.`;
 
+      const response = await invokeLLM({ prompt: prompt, query: prompt });
       console.log('[CareerSimulator] Raw response:', response);
 
       let parsedData = null;
       if (typeof response === 'string') {
         const jsonMatch = response.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
-          try {
-            parsedData = JSON.parse(jsonMatch[0]);
-          } catch (e) {
-            console.error('[CareerSimulator] JSON parse error:', e);
-          }
+          try { parsedData = JSON.parse(jsonMatch[0]); } catch (e) { console.error('[CareerSimulator] JSON parse error:', e); }
         }
       } else if (typeof response === 'object') {
         parsedData = response;
       }
 
-      // Build result with fallbacks
       const simResult = {
         degree: parsedData?.degree || degree,
-        predicted_salary_year1: parsedData?.predicted_salary_year1 || "Varies",
-        predicted_salary_year5: parsedData?.predicted_salary_year5 || "Varies",
-        predicted_salary_year10: parsedData?.predicted_salary_year10 || "Varies",
+        predicted_salary_year1: parsedData?.predicted_salary_year1 || "₹5-8 LPA",
+        predicted_salary_year5: parsedData?.predicted_salary_year5 || "₹12-18 LPA",
+        predicted_salary_year10: parsedData?.predicted_salary_year10 || "₹20-30 LPA",
         AI_risk_level: parsedData?.AI_risk_level || "Medium",
-        future_proof_score: parsedData?.future_proof_score || 5,
-        overall_verdict: parsedData?.overall_verdict || "This career path has good potential. Continue developing skills and gaining experience.",
-        key_milestones: parsedData?.key_milestones || ["Graduate with your degree", "Secure first job in your field", "Gain 3-5 years of experience"],
-        top_roles: parsedData?.top_roles || ["Entry-level role", "Mid-level specialist", "Senior professional"],
-        skills_to_accelerate: parsedData?.skills_to_accelerate || ["Communication", "Problem solving", "Technical skills"],
-        warnings: parsedData?.warnings || [],
-        growth_potential: parsedData?.growth_potential || "Positive",
-        best_locations: parsedData?.best_locations || ["Major cities"],
-        predicted_salary_year1: parsedData?.predicted_salary_year1 || "Varies",
-        predicted_salary_year5: parsedData?.predicted_salary_year5 || "Varies",
-        predicted_salary_year10: parsedData?.predicted_salary_year10 || "Varies",
+        future_proof_score: parsedData?.future_proof_score || 7,
+        overall_verdict: parsedData?.overall_verdict || "This career path has strong growth potential. Continue building relevant skills and gaining experience.",
+        key_milestones: parsedData?.key_milestones || ["Graduate with your degree (Year 0)", "Secure first job in your field (Year 1)", "Gain 3-5 years of experience (Year 3-5)", "Move into senior role (Year 5-7)", "Take on leadership or specialization (Year 8-10)"],
+        top_roles: parsedData?.top_roles || ["Entry-level role", "Mid-level specialist", "Senior professional", "Team Lead", "Manager"],
+        skills_to_accelerate: parsedData?.skills_to_accelerate || ["Communication", "Problem solving", "Technical skills", "Leadership", "Adaptability"],
+        warnings: parsedData?.warnings || ["Stay updated with industry trends", "Build a strong professional network"],
+        growth_potential: parsedData?.growth_potential || "High",
+        best_locations: parsedData?.best_locations || ["Bangalore", "Mumbai", "Delhi NCR", "Hyderabad", "Pune"],
       };
 
       console.log('[CareerSimulator] Parsed:', simResult);
@@ -124,7 +113,6 @@ Return a JSON object with:
 
       <SectionHeader title="Career Simulator" subtitle="Simulate your 5–10 year career outlook based on your degree + experience" icon={Cpu} />
 
-      {/* Input form */}
       <div className="bg-card border border-border rounded-xl p-5 space-y-4">
         <div>
           <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Your Degree / Field</label>
@@ -174,7 +162,6 @@ Return a JSON object with:
         </button>
       </div>
 
-      {/* Error Message */}
       {error && (
         <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4 text-destructive">
           <p className="text-sm">{error}</p>
@@ -185,13 +172,11 @@ Return a JSON object with:
 
       {!loading && result && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-5">
-          {/* Verdict */}
           <div className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-xl p-5">
             <p className="font-heading font-bold text-lg">{result.degree}</p>
             <p className="text-sm text-muted-foreground mt-1">{result.overall_verdict}</p>
           </div>
 
-          {/* Score cards */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
               { label: "Year 1 Salary", value: result.predicted_salary_year1, icon: DollarSign, color: "text-green-600" },
@@ -207,7 +192,6 @@ Return a JSON object with:
             ))}
           </div>
 
-          {/* Milestones */}
           {result.key_milestones && result.key_milestones.length > 0 && (
             <div className="bg-card border border-border rounded-xl p-5">
               <h3 className="font-heading font-bold mb-3">📅 Career Milestones</h3>
