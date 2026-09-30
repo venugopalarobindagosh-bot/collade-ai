@@ -38,30 +38,15 @@ async function fetchCredits() {
       plan: "free",
       access_locked: true,
       welcome_shown: true,
-      subscription_start: null,
-      subscription_expiry: null,
       _id: null,
       _loaded: true,
     };
   }
 
-  let plan = record.plan ?? "free";
   let credits = record.credits_remaining;
   if (credits < 0) credits = 0;
 
-  // Check expiry locally — no DB write needed
-  const isPremiumExpired =
-    plan === "premium" &&
-    record.subscription_expiry &&
-    new Date(record.subscription_expiry) < new Date();
-
-  if (isPremiumExpired) {
-    console.log("[useCredits] Premium expired — showing as free");
-    plan = "free";
-    credits = 0;
-  }
-
-  const state = creditsStateFromRecord({ ...record, plan, credits_remaining: credits });
+  const state = creditsStateFromRecord({ ...record, credits_remaining: credits });
 
   // Local welcome flag — no DB write
   if (!state.welcome_shown && state.credits_remaining > 5) {
@@ -92,8 +77,6 @@ const DEFAULT_STATE = {
   plan: "free",
   access_locked: false,
   welcome_shown: true,
-  subscription_start: null,
-  subscription_expiry: null,
   _id: null,
   _loaded: false,
 };
@@ -110,18 +93,18 @@ export function useCredits() {
 
     // ── Listen for credit updates from the edge function (via llm.js) ──
     const onCreditsUpdated = (e) => {
-      const { credits_remaining, premium } = e.detail || {};
+      const { credits_remaining, plan } = e.detail || {};
       if (credits_remaining === undefined || credits_remaining === null) return;
 
       const next = {
         ...(cachedCredits || DEFAULT_STATE),
-        credits_remaining: premium ? 9999 : credits_remaining,
-        plan: premium ? "premium" : (cachedCredits?.plan || "free"),
-        access_locked: !premium && credits_remaining <= 0,
+        credits_remaining,
+        plan: plan || cachedCredits?.plan || "free",
+        access_locked: credits_remaining <= 0,
         _loaded: true,
       };
       broadcast(next);
-      console.log("[useCredits] Credits updated from server:", credits_remaining, "premium:", premium);
+      console.log("[useCredits] Credits updated from server:", credits_remaining);
     };
     window.addEventListener("collade:credits-updated", onCreditsUpdated);
 
@@ -161,7 +144,7 @@ export function useCredits() {
     }
 
     const cached = cachedCredits;
-    if (cached && cached.plan !== "premium" && (cached.credits_remaining ?? 0) <= 0) {
+    if (cached && (cached.credits_remaining ?? 0) <= 0) {
       setDeductError("Out of credits");
       return false;
     }
@@ -187,7 +170,6 @@ export function useCredits() {
 
   return {
     ...state,
-    isPremium: state.plan === "premium",
     showPaymentOptions: shouldShowPayments(state.credits_remaining, state.plan),
     deducting,
     deductError,

@@ -3,11 +3,11 @@ import { CheckCircle2, ExternalLink } from "lucide-react";
 import { useState, useEffect } from "react";
 
 const LOCALE_PRICING = {
-  IN:      { starter: "₹500",         pro: "₹1,000",    unlimited: "₹5,000" },
-  ID:      { starter: "Rp 99.000",    pro: "Rp 199.000", unlimited: "Rp 999.000" },
-  VN:      { starter: "141.000 ₫",    pro: "282.000 ₫",  unlimited: "1.400.000 ₫" },
-  BD:      { starter: "৳550",         pro: "৳1,100",     unlimited: "৳5,500" },
-  DEFAULT: { starter: "$6",           pro: "$12",        unlimited: "$60" },
+  IN:      { starter: "₹500",         pro: "₹1,000",    premium: "₹5,000" },
+  ID:      { starter: "Rp 99.000",    pro: "Rp 199.000", premium: "Rp 999.000" },
+  VN:      { starter: "141.000 ₫",    pro: "282.000 ₫",  premium: "1.400.000 ₫" },
+  BD:      { starter: "৳550",         pro: "৳1,100",     premium: "৳5,500" },
+  DEFAULT: { starter: "$6",           pro: "$12",        premium: "$60" },
 };
 
 function usePricing() {
@@ -45,14 +45,15 @@ const PLANS = [
     features: ["500 career searches", "Salary insights (India & abroad)", "Global degree finder", "Compare careers side by side", "All quiz results", "Career reports & certificates"],
   },
   {
-    id: "unlimited",
-    label: "Unlimited",
-    priceKey: "unlimited",
+    id: "premium",
+    label: "Premium",
+    priceKey: "premium",
     payUrl: "https://rzp.io/rzp/JzTyh74C",
-    credits: "Unlimited for 6 months",
-    cta: "Get Unlimited Access →",
+    credits: "5,000 credits",
+    savings: "🔥 BEST VALUE",
+    cta: "Get 5,000 Credits →",
     highlight: false,
-    features: ["Unlimited career searches", "Everything in Pro", "6 months full access", "Priority support"],
+    features: ["5,000 career searches", "Everything in Pro", "Full counselor reports", "Certificates for all paths", "Priority support", "Credits never expire"],
   },
 ];
 
@@ -69,7 +70,7 @@ export default function PricingSection({ onLogin, isApp = false }) {
           <p className="text-white/40 text-base">
             {isApp
               ? "Buy credits on colladeai.com — then use them here in the app."
-              : "No subscriptions. No confusion. Pay once, use whenever."}
+              : "No subscriptions. No confusion. Credits never expire."}
           </p>
         </div>
 
@@ -114,7 +115,7 @@ export default function PricingSection({ onLogin, isApp = false }) {
                     )}
                   </ul>
 
-                  {/* ── BUTTON: only on website ── */}
+                  {/* Website button */}
                   {!isApp && (
                     <button
                       onClick={() => window.open(plan.payUrl, "_blank")}
@@ -129,7 +130,7 @@ export default function PricingSection({ onLogin, isApp = false }) {
                     </button>
                   )}
 
-                  {/* ── IN APP: text-only, no clickable link ── */}
+                  {/* In-app: text-only */}
                   {isApp && (
                     <div
                       className={`w-full sm:w-auto px-6 py-3.5 rounded-xl font-bold text-sm whitespace-nowrap flex items-center justify-center gap-2 border ${

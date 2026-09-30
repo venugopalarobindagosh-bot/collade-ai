@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { X, Zap, Star, Crown, User } from "lucide-react";
+import { X, Zap, Star, Crown, User, ExternalLink } from "lucide-react";
 import { useCredits } from "@/hooks/useCredits";
 import { getCurrentUser } from "@/lib/auth";
 
@@ -28,16 +28,19 @@ const PLANS = [
   },
   {
     id: "premium",
-    label: "Unlimited",
+    label: "Premium",
     price: "₹5,000",
     payUrl: "https://rzp.io/rzp/JzTyh74C",
-    credits: null,
+    credits: 5000,
     icon: Crown,
     accentColor: "#F59E0B",
     badge: "Best Deal",
-    features: ["Unlimited AI actions", "All features unlocked", "6 months full access"],
+    features: ["5,000 credits", "All features unlocked", "Credits never expire"],
   },
 ];
+
+// Detect if running inside Capacitor native app
+const isApp = typeof window !== "undefined" && window.Capacitor?.isNativePlatform?.() === true;
 
 export default function UpgradeModal({ onClose, canClose = true }) {
   const { credits_remaining, showPaymentOptions, _loaded } = useCredits();
@@ -47,10 +50,15 @@ export default function UpgradeModal({ onClose, canClose = true }) {
     getCurrentUser().then(me => setUserEmail(me?.email || "")).catch(() => {});
   }, []);
 
-  // Hide payment modal entirely for users with plenty of credits or premium plan
+  // Hide payment modal entirely if user has plenty of credits
   if (_loaded && !showPaymentOptions) return null;
 
   const handleSelect = (plan) => {
+    if (isApp) {
+      // In app — cannot open payment link. Just close and tell them.
+      onClose?.();
+      return;
+    }
     window.open(plan.payUrl, "_blank");
   };
 
@@ -60,12 +68,14 @@ export default function UpgradeModal({ onClose, canClose = true }) {
         <div className="flex items-center justify-between p-5 border-b border-zinc-700">
           <div>
             <h2 className="font-heading font-bold text-lg text-white">
-              {credits_remaining <= 0 ? "Credits Exhausted" : "Unlock Full Access"}
+              {credits_remaining <= 0 ? "Credits Exhausted" : "Get More Credits"}
             </h2>
             <p className="text-sm text-zinc-400 mt-0.5">
-              {credits_remaining <= 0
-                ? "You've used all your credits. Choose a plan to keep going."
-                : "Pick a plan to continue with Collade AI"}
+              {isApp
+                ? "Buy credits on colladeai.com, then use them here."
+                : credits_remaining <= 0
+                  ? "You've used all your credits. Choose a pack to keep going."
+                  : "Pick a credit pack to continue with Collade AI"}
             </p>
             {userEmail && (
               <div className="flex items-center gap-1.5 mt-1.5 text-[11px] text-zinc-500">
@@ -89,7 +99,19 @@ export default function UpgradeModal({ onClose, canClose = true }) {
               <div
                 key={plan.id}
                 onClick={() => handleSelect(plan)}
-                className={`relative rounded-xl border-2 p-4 cursor-pointer transition-all hover:scale-[1.01] hover:border-zinc-500 ${plan.badge === "Most Popular" ? "border-purple-500 bg-purple-500/10" : plan.badge === "Best Deal" ? "border-amber-500 bg-amber-500/10" : "border-zinc-700 bg-zinc-800"}`}
+                className={`relative rounded-xl border-2 p-4 transition-all ${
+                  isApp
+                    ? "cursor-default border-zinc-700 bg-zinc-800"
+                    : "cursor-pointer hover:scale-[1.01] hover:border-zinc-500"
+                } ${
+                  plan.badge === "Most Popular" && !isApp
+                    ? "border-purple-500 bg-purple-500/10"
+                    : plan.badge === "Best Deal" && !isApp
+                      ? "border-amber-500 bg-amber-500/10"
+                      : isApp
+                        ? "border-zinc-700 bg-zinc-800"
+                        : "border-zinc-700 bg-zinc-800"
+                }`}
               >
                 {plan.badge && (
                   <div
@@ -119,10 +141,18 @@ export default function UpgradeModal({ onClose, canClose = true }) {
                   <div className="text-right flex-shrink-0">
                     <p className="font-heading font-bold text-2xl text-white">{plan.price}</p>
                     <p className="text-xs font-semibold mt-0.5" style={{ color: plan.accentColor }}>
-                      {plan.credits ? `${plan.credits} credits` : "Unlimited"}
+                      {plan.credits.toLocaleString()} credits
                     </p>
                   </div>
                 </div>
+
+                {/* In-app hint */}
+                {isApp && (
+                  <div className="mt-3 pt-3 border-t border-zinc-700/50 flex items-center gap-2 text-[11px] text-zinc-500">
+                    <ExternalLink className="h-3 w-3" />
+                    <span>Buy on colladeai.com</span>
+                  </div>
+                )}
               </div>
             );
           })}
@@ -130,7 +160,7 @@ export default function UpgradeModal({ onClose, canClose = true }) {
 
         <div className="px-5 pb-5">
           <p className="text-[11px] text-center text-zinc-500">
-            Every AI action uses 1 credit · Unlimited plan valid for 6 months · Secure payment via Razorpay
+            Every AI action uses 1 credit · Credits never expire · Secure payment via Razorpay
           </p>
         </div>
       </div>

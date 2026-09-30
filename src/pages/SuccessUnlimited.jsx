@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CheckCircle2, Crown, ArrowRight, Clock, AlertCircle, Smartphone, Globe } from "lucide-react";
+import { CheckCircle2, Crown, AlertCircle, Smartphone, Globe } from "lucide-react";
 import { motion } from "framer-motion";
 import { getCurrentUser } from "@/lib/auth";
 import { supabase } from "@/api/supabaseClient";
@@ -10,7 +10,7 @@ const DEEP_LINK = "collade://open";
 export default function SuccessUnlimited() {
   const [state, setState] = useState("verifying");
   const [errorMsg, setErrorMsg] = useState("");
-  const [expiryDate, setExpiryDate] = useState(null);
+  const [creditsRemaining, setCreditsRemaining] = useState(5000);
 
   useEffect(() => {
     async function verifyAndActivate() {
@@ -55,15 +55,7 @@ export default function SuccessUnlimited() {
         }
 
         if (data.success === true) {
-          if (data.expiry) {
-            setExpiryDate(
-              new Date(data.expiry).toLocaleDateString("en-IN", {
-                day: "numeric",
-                month: "long",
-                year: "numeric",
-              })
-            );
-          }
+          setCreditsRemaining(data.credits_remaining || 5000);
           setState("success");
         } else {
           setErrorMsg(data?.error || "No valid payment found. Please complete payment on colladeai.com first.");
@@ -103,12 +95,12 @@ export default function SuccessUnlimited() {
   };
 
   const FEATURES = [
-    "Unlimited AI career searches",
+    "5,000 credits to power your research",
     "All Pro features included",
     "Career simulations & FutureScore",
     "Full reports, certificates & counselor PDFs",
     "Side-by-side career comparisons",
-    "6 months of uninterrupted full access",
+    "Credits never expire",
     "Priority support",
   ];
 
@@ -146,19 +138,13 @@ export default function SuccessUnlimited() {
             </div>
 
             <div className="inline-flex items-center gap-2 bg-amber-500/10 border border-amber-500/25 text-amber-400 text-xs font-bold px-4 py-1.5 rounded-full mb-4 uppercase tracking-wider">
-              <Crown className="h-3 w-3" /> Unlimited Access Activated
+              <Crown className="h-3 w-3" /> Premium Activated
             </div>
 
             <h1 className="font-heading text-3xl font-extrabold text-white mb-2">Payment Successful!</h1>
-            <p className="text-white/50 text-base mb-2">You now have <span className="text-amber-400 font-bold">unlimited access</span> for 6 months.</p>
-
-            {expiryDate && (
-              <div className="inline-flex items-center gap-2 bg-white/4 border border-white/8 text-white/50 text-xs px-4 py-2 rounded-lg mb-6">
-                <Clock className="h-3.5 w-3.5" />
-                Access expires on <span className="text-white font-semibold ml-1">{expiryDate}</span>
-              </div>
-            )}
-            {!expiryDate && <div className="mb-6" />}
+            <p className="text-white/50 text-base mb-6">
+              You now have <span className="text-amber-400 font-bold">{creditsRemaining} credits</span> to research and learn.
+            </p>
 
             <div className="bg-white/4 border border-amber-500/15 rounded-2xl p-6 text-left mb-6 space-y-3">
               {FEATURES.map((f, i) => (
@@ -171,7 +157,7 @@ export default function SuccessUnlimited() {
 
             <div className="inline-flex items-center gap-2 bg-amber-500/10 border border-amber-500/25 text-amber-400 text-sm font-bold px-5 py-3 rounded-xl mb-6">
               <Crown className="h-4 w-4" />
-              Your 6-month access starts now
+              {creditsRemaining} credits in your account
             </div>
 
             {/* ── Continue with App ── */}

@@ -12,15 +12,13 @@ const corsHeaders = {
 // ── Rate limit: max 10 requests per user per minute ──
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX = 10;
-const rateLimitMap = new Map(); // userId -> [timestamps]
+const rateLimitMap = new Map();
 
 function isRateLimited(userId) {
   const now = Date.now();
   const timestamps = rateLimitMap.get(userId) || [];
   const recent = timestamps.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
-  if (recent.length >= RATE_LIMIT_MAX) {
-    return true;
-  }
+  if (recent.length >= RATE_LIMIT_MAX) return true;
   recent.push(now);
   rateLimitMap.set(userId, recent);
   return false;
@@ -74,7 +72,7 @@ serve(async (req) => {
       );
     }
 
-    // ── 4. Check + deduct credit (service_role) ──
+    // ── 4. Fetch credit row (service_role) ──
     const serviceClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
@@ -101,10 +99,10 @@ serve(async (req) => {
       );
     }
 
-    const isPremium = creditRow.plan === 'premium';
+    // ── 5. Check balance ──
     const currentBalance = Number(creditRow.balance ?? creditRow.credits_remaining ?? 0);
 
-    if (!isPremium && currentBalance < 1) {
+    if (currentBalance < 1) {
       return new Response(
         JSON.stringify({
           error: 'out_of_credits',
@@ -115,42 +113,39 @@ serve(async (req) => {
       );
     }
 
-    let newBalance = currentBalance;
-    if (!isPremium) {
-      newBalance = currentBalance - 1;
-      const { error: updateError } = await serviceClient
+    // ── 6. Deduct 1 credit (always, everyone) ──
+    const newBalance = currentBalance - 1;
+    const { error: updateError } = await serviceClient
+      .from('user_credits')
+      .update({
+        balance: newBalance,
+        credits_remaining: newBalance,
+        access_locked: newBalance <= 0,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', creditRow.id);
+
+    if (updateError) {
+      console.error('Credit deduction error:', updateError);
+      return new Response(
+        JSON.stringify({ error: 'Failed to deduct credit' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // ── 7. Call Groq ──
+    const groqKey = Deno.env.get('GROQ_API_KEY');
+    if (!groqKey) {
+      // Refund
+      await serviceClient
         .from('user_credits')
         .update({
-          balance: newBalance,
-          credits_remaining: newBalance,
-          access_locked: newBalance <= 0,
+          balance: currentBalance,
+          credits_remaining: currentBalance,
+          access_locked: currentBalance <= 0,
           updated_at: new Date().toISOString(),
         })
         .eq('id', creditRow.id);
-
-      if (updateError) {
-        console.error('Credit deduction error:', updateError);
-        return new Response(
-          JSON.stringify({ error: 'Failed to deduct credit' }),
-          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-    }
-
-    // ── 5. Call Groq ──
-    const groqKey = Deno.env.get('GROQ_API_KEY');
-    if (!groqKey) {
-      if (!isPremium) {
-        await serviceClient
-          .from('user_credits')
-          .update({
-            balance: currentBalance,
-            credits_remaining: currentBalance,
-            access_locked: currentBalance <= 0,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', creditRow.id);
-      }
       return new Response(
         JSON.stringify({ error: 'GROQ_API_KEY not configured' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -197,17 +192,16 @@ If you don't know a specific number, say "The data is uncertain, but typically r
     if (!groqRes.ok) {
       console.error('Groq error:', groqData);
 
-      if (!isPremium) {
-        await serviceClient
-          .from('user_credits')
-          .update({
-            balance: currentBalance,
-            credits_remaining: currentBalance,
-            access_locked: currentBalance <= 0,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', creditRow.id);
-      }
+      // Refund
+      await serviceClient
+        .from('user_credits')
+        .update({
+          balance: currentBalance,
+          credits_remaining: currentBalance,
+          access_locked: currentBalance <= 0,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', creditRow.id);
 
       return new Response(
         JSON.stringify({ error: groqData?.error?.message || 'Groq API error' }),
@@ -217,14 +211,14 @@ If you don't know a specific number, say "The data is uncertain, but typically r
 
     const answer = groqData.choices?.[0]?.message?.content || '';
 
-    // ── 6. Return answer + updated credit balance ──
+    // ── 8. Return answer + updated credit balance ──
     return new Response(
       JSON.stringify({
         answer,
         result: answer,
         response: answer,
-        credits_remaining: isPremium ? null : newBalance,
-        premium: isPremium,
+        credits_remaining: newBalance,
+        plan: creditRow.plan,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );

@@ -9,25 +9,22 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// ── Tier config: what each tier costs and grants ──
+// ── Tier config: 3 credit packs (no subscriptions, no expiry) ──
 const TIERS = {
   starter: {
     amount: 50000,        // ₹500 in paise
     credits: 50,
     plan: 'basic',
-    subscriptionMonths: 0, // No subscription
   },
   pro: {
     amount: 100000,       // ₹1,000 in paise
     credits: 500,
     plan: 'pro',
-    subscriptionMonths: 0,
   },
   premium: {
     amount: 500000,       // ₹5,000 in paise
-    credits: 9999,
+    credits: 5000,        // was 9999 → now 5,000
     plan: 'premium',
-    subscriptionMonths: 6,
   },
 };
 
@@ -37,7 +34,6 @@ serve(async (req) => {
   }
 
   try {
-    // ── 1. Verify auth ──
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) {
       return new Response(
@@ -60,7 +56,6 @@ serve(async (req) => {
       );
     }
 
-    // ── 2. Parse request body ──
     const { tier } = await req.json();
     if (!tier || !TIERS[tier]) {
       return new Response(
@@ -71,7 +66,6 @@ serve(async (req) => {
 
     const tierConfig = TIERS[tier];
 
-    // ── 3. Get Razorpay credentials ──
     const RAZORPAY_KEY_ID = Deno.env.get('RAZORPAY_KEY_ID') ?? '';
     const RAZORPAY_KEY_SECRET = Deno.env.get('RAZORPAY_KEY_SECRET') ?? '';
 
@@ -83,7 +77,6 @@ serve(async (req) => {
       );
     }
 
-    // ── 4. Fetch recent payments from Razorpay ──
     const auth = btoa(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`);
     const fromTimestamp = Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000);
     const paymentsUrl = `https://api.razorpay.com/v1/payments?from=${fromTimestamp}&count=100`;
@@ -103,7 +96,6 @@ serve(async (req) => {
     const paymentsData = await paymentsRes.json();
     const payments = paymentsData.items || [];
 
-    // ── 5. Find a matching payment ──
     const matchingPayment = payments.find((p: any) => {
       const amountOk = p.amount === tierConfig.amount;
       const statusOk = p.status === 'captured';
@@ -123,13 +115,11 @@ serve(async (req) => {
       );
     }
 
-    // ── 6. Write to user_credits (service_role) ──
     const serviceClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    // ── Check if this payment has already been used ──
     const { data: existing } = await serviceClient
       .from('user_credits')
       .select('id, balance, credits_remaining, plan, razorpay_payment_id')
@@ -137,7 +127,6 @@ serve(async (req) => {
       .maybeSingle();
 
     if (existing?.razorpay_payment_id === matchingPayment.id) {
-      // Already applied — return current state
       return new Response(
         JSON.stringify({
           success: true,
@@ -149,17 +138,11 @@ serve(async (req) => {
       );
     }
 
-    // Calculate new state
     const currentCredits = Number(existing?.balance ?? existing?.credits_remaining ?? 0);
     const newBalance = currentCredits + tierConfig.credits;
 
-    const expires =
-      tierConfig.subscriptionMonths > 0
-        ? new Date(Date.now() + tierConfig.subscriptionMonths * 30 * 24 * 60 * 60 * 1000).toISOString()
-        : existing?.subscription_expiry || null;
-
+    // No subscription, no expiry — credits never expire
     if (existing) {
-      // Update existing row
       const { error: updateError } = await serviceClient
         .from('user_credits')
         .update({
@@ -167,8 +150,6 @@ serve(async (req) => {
           credits_remaining: newBalance,
           plan: tierConfig.plan,
           access_locked: false,
-          subscription_start: tierConfig.subscriptionMonths > 0 ? new Date().toISOString() : existing.subscription_start,
-          subscription_expiry: expires,
           razorpay_payment_id: matchingPayment.id,
           updated_at: new Date().toISOString(),
         })
@@ -182,7 +163,6 @@ serve(async (req) => {
         );
       }
     } else {
-      // Insert new row
       const { error: insertError } = await serviceClient.from('user_credits').insert({
         user_id: user.id,
         created_by: user.email,
@@ -191,8 +171,6 @@ serve(async (req) => {
         plan: tierConfig.plan,
         access_locked: false,
         welcome_shown: true,
-        subscription_start: tierConfig.subscriptionMonths > 0 ? new Date().toISOString() : null,
-        subscription_expiry: expires,
         razorpay_payment_id: matchingPayment.id,
       });
 
@@ -212,7 +190,6 @@ serve(async (req) => {
         credits_added: tierConfig.credits,
         credits_remaining: newBalance,
         plan: tierConfig.plan,
-        expiry: expires,
         payment_id: matchingPayment.id,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
