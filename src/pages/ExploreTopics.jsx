@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { Compass, Search } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 import { useCredits } from "@/hooks/useCredits";
 import { invokeLLM } from "@/api/llm";
+import { parseAIResponse, extractArray } from "@/lib/aiResponseHandler";
 import SectionHeader from "../components/SectionHeader";
 import CareerCard from "../components/CareerCard";
 import LoadingGrid from "../components/LoadingGrid";
@@ -38,21 +40,23 @@ export default function ExploreTopics() {
   const { deductCredit } = useCredits();
   const [selectedTopic, setSelectedTopic] = useState(null);
   const [results, setResults] = useState([]);
+  const [markdownFallback, setMarkdownFallback] = useState("");
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [error, setError] = useState(null);
 
   const fetchTopic = async (topic) => {
     const spent = await deductCredit();
-    if (!spent) { 
-      window.dispatchEvent(new CustomEvent("collade:upgrade")); 
-      return; 
+    if (!spent) {
+      window.dispatchEvent(new CustomEvent("collade:upgrade"));
+      return;
     }
-    
+
     setLoading(true);
     setResults([]);
+    setMarkdownFallback("");
     setError(null);
-    
+
     try {
       const prompt = `For the topic/interest "${topic}", list ALL related degrees, diplomas, certifications, and career paths globally.
 
@@ -71,7 +75,9 @@ Return a JSON object with a "careers" array. Each career should have:
 - ai_impact (string: "High", "Medium", or "Low")
 - growth (string)
 - locations (array)
-- skills_needed (array)`;
+- skills_needed (array)
+
+IMPORTANT: Return ONLY valid JSON. No markdown, no code fences, no explanation. Start your response with { and end with }.`;
 
       const response = await invokeLLM({
         prompt: prompt,
@@ -80,29 +86,30 @@ Return a JSON object with a "careers" array. Each career should have:
 
       console.log('[ExploreTopics] Raw response:', response);
 
-      let parsedData = null;
-      if (typeof response === 'string') {
-        const jsonMatch = response.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          try {
-            parsedData = JSON.parse(jsonMatch[0]);
-          } catch (e) {
-            console.error('[ExploreTopics] JSON parse error:', e);
-          }
-        }
-      } else if (typeof response === 'object') {
-        parsedData = response;
-      }
+      const parsed = parseAIResponse(response);
+      console.log('[ExploreTopics] Parsed type:', parsed.type);
 
-      const careers = parsedData?.careers || [];
-      console.log('[ExploreTopics] Parsed:', careers);
-      setResults(careers);
+      if (parsed.type === 'json') {
+        const careers = extractArray(parsed.data, ['careers', 'matches', 'results']);
+        console.log('[ExploreTopics] Extracted careers:', careers.length);
+        setResults(careers);
+        if (careers.length === 0) {
+          // JSON was parsed but array is empty — show raw as fallback
+          setMarkdownFallback(parsed.raw);
+        }
+      } else if (parsed.type === 'markdown') {
+        // AI returned markdown — show it directly
+        console.log('[ExploreTopics] Rendering as markdown');
+        setMarkdownFallback(parsed.raw);
+      } else {
+        setError('No results returned. Please try again.');
+      }
 
     } catch (err) {
       console.error('[ExploreTopics] Error:', err);
       setError(err.message || 'Failed to find careers. Please try again.');
-    } finally { 
-      setLoading(false); 
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -167,6 +174,7 @@ Return a JSON object with a "careers" array. Each career should have:
       {/* Results */}
       {loading && <LoadingGrid text={`Finding careers in ${selectedTopic}...`} />}
 
+      {/* Structured cards */}
       {!loading && results.length > 0 && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
           <p className="text-sm text-muted-foreground">
@@ -176,6 +184,26 @@ Return a JSON object with a "careers" array. Each career should have:
             {results.map((career, i) => (
               <CareerCard key={i} career={career} index={i} />
             ))}
+          </div>
+        </motion.div>
+      )}
+
+      {/* Markdown fallback — shows when JSON parse fails but AI returned content */}
+      {!loading && markdownFallback && results.length === 0 && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Career paths for <span className="font-semibold text-foreground">{selectedTopic}</span>:
+          </p>
+          <div className="bg-card border border-border rounded-xl p-6 prose prose-invert prose-sm max-w-none
+            prose-headings:text-foreground prose-headings:font-bold
+            prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2
+            prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
+            prose-p:text-muted-foreground prose-p:my-1.5
+            prose-li:text-muted-foreground prose-li:my-0.5
+            prose-strong:text-foreground
+            prose-code:text-primary prose-code:bg-secondary prose-code:px-1 prose-code:rounded
+          ">
+            <ReactMarkdown>{markdownFallback}</ReactMarkdown>
           </div>
         </motion.div>
       )}
