@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useSearchParams, Navigate, useNavigate } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Compass, Loader2, Mail, Lock, User, AlertCircle } from 'lucide-react';
 import { supabase } from '@/api/supabaseClient';
 import { signInWithGoogle, signInWithEmail, signUpWithEmail, isAuthenticated } from '@/lib/auth';
@@ -23,32 +23,51 @@ export default function Login() {
 
   const effectiveMode = forceLoginOnly ? 'signin' : mode;
 
+  // ── 1. Initial auth check + listener ──
   useEffect(() => {
-    isAuthenticated().then(ok => {
-      setAuthed(ok);
-      setChecking(false);
-    });
+    let mounted = true;
+
+    isAuthenticated()
+      .then(ok => {
+        if (!mounted) return;
+        setAuthed(!!ok);
+        setChecking(false);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setAuthed(false);
+        setChecking(false);
+      });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!mounted) return;
       if (session) {
         setAuthed(true);
         setChecking(false);
       }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
+  // ── 2. THE FIX: navigate when authed becomes true (runs after render) ──
+  useEffect(() => {
+    if (authed && !checking) {
+      console.log('[Login] Authed — navigating to', redirect);
+      navigate(redirect, { replace: true });
+    }
+  }, [authed, checking, redirect, navigate]);
+
+  // ── Loading state ──
   if (checking) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-black">
         <Loader2 className="h-8 w-8 animate-spin text-yellow-400" />
       </div>
     );
-  }
-
-  if (authed) {
-    return <Navigate to={redirect} replace />;
   }
 
   const handleGoogle = async () => {
@@ -74,11 +93,7 @@ export default function Login() {
       } else {
         await signInWithEmail(email.trim(), password);
       }
-
-      // Give Supabase a moment to persist the session, then force-navigate
-      // This avoids the "redirect back to landing" race condition
-      await new Promise(r => setTimeout(r, 100));
-      navigate(redirect, { replace: true });
+      // onAuthStateChange + useEffect above will handle navigation
     } catch (err) {
       setError(err.message || 'Something went wrong');
       setLoading(false);
@@ -219,7 +234,7 @@ export default function Login() {
         </div>
 
         <p className="text-center text-xs text-white/30 mt-6">
-          By signing in, you're agreeing to our{' '}
+          By signing in, you agree to our{' '}
           <a href="/privacy" className="text-white/50 hover:text-white underline">Privacy Policy</a>
         </p>
       </div>
