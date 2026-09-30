@@ -1,6 +1,6 @@
 import { Compass } from "lucide-react";
 
-export default function LandingNav({ onLogin, onScrollToPricing }) {
+export default function LandingNav({ onLogin, onScrollToPricing, isApp = false }) {
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-black/90 backdrop-blur-md border-b border-white/8">
       <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
@@ -21,7 +21,7 @@ export default function LandingNav({ onLogin, onScrollToPricing }) {
             onClick={onLogin}
             className="bg-yellow-400 hover:bg-yellow-300 text-black px-4 py-2 rounded-lg text-sm font-bold transition-colors"
           >
-            Sign In Free →
+            {isApp ? "Sign In" : "Sign In Free →"}
           </button>
         </div>
       </div>

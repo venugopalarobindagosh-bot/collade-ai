@@ -58,7 +58,6 @@ export async function getFreshAccessToken() {
     }
   }
 
-  console.log('[Auth] Valid access token ready for user:', user.id);
   return session.access_token;
 }
 
@@ -71,6 +70,7 @@ export function redirectToLogin(returnPath = '/dashboard') {
   window.location.href = `/login?redirect=${encodeURIComponent(returnPath)}`;
 }
 
+// ── Google sign-in (website only — hidden in app) ──
 export async function signInWithGoogle(redirectPath = '/dashboard') {
   const redirectTo = `${window.location.origin}/login?redirect=${encodeURIComponent(redirectPath)}`;
   const { error } = await supabase.auth.signInWithOAuth({
@@ -80,11 +80,25 @@ export async function signInWithGoogle(redirectPath = '/dashboard') {
   if (error) throw error;
 }
 
-export async function signInWithEmail(email, redirectPath = '/dashboard') {
-  const redirectTo = `${window.location.origin}/login?redirect=${encodeURIComponent(redirectPath)}`;
-  const { error } = await supabase.auth.signInWithOtp({
+// ── Email + password sign-in (works everywhere) ──
+export async function signInWithEmail(email, password) {
+  const { data, error } = await supabase.auth.signInWithPassword({
     email,
-    options: { emailRedirectTo: redirectTo },
+    password,
   });
   if (error) throw error;
+  return data;
+}
+
+// ── Email + password sign-up (website only — hidden in app) ──
+export async function signUpWithEmail(email, password, fullName = '') {
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      data: { full_name: fullName },
+    },
+  });
+  if (error) throw error;
+  return data;
 }

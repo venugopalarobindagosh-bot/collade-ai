@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { CheckCircle2 } from "lucide-react";
+import { CheckCircle2, ExternalLink } from "lucide-react";
 import { useState, useEffect } from "react";
 
 const LOCALE_PRICING = {
@@ -56,7 +56,7 @@ const PLANS = [
   },
 ];
 
-export default function PricingSection({ onLogin }) {
+export default function PricingSection({ onLogin, isApp = false }) {
   const { pricing, loaded } = usePricing();
 
   return (
@@ -66,7 +66,11 @@ export default function PricingSection({ onLogin }) {
           <h2 className="font-heading text-2xl sm:text-3xl font-extrabold text-white mb-2">
             Simple Pricing. Pay Only When You Need More.
           </h2>
-          <p className="text-white/40 text-base">No subscriptions. No confusion. Pay once, use whenever.</p>
+          <p className="text-white/40 text-base">
+            {isApp
+              ? "Buy credits on colladeai.com — then use them here in the app."
+              : "No subscriptions. No confusion. Pay once, use whenever."}
+          </p>
         </div>
 
         <div className="flex flex-col gap-4 mb-8">
@@ -109,17 +113,36 @@ export default function PricingSection({ onLogin }) {
                       <li className="text-xs text-white/25 ml-5">+{plan.features.length - 3} more</li>
                     )}
                   </ul>
-                  <button
-                    onClick={() => window.open(plan.payUrl, "_blank")}
-                    className={`w-full sm:w-auto px-6 py-3.5 rounded-xl font-extrabold text-sm transition-all whitespace-nowrap ${
-                      plan.highlight
-                        ? "bg-gradient-to-r from-yellow-400 to-yellow-500 hover:from-yellow-300 hover:to-yellow-400 text-black shadow-lg shadow-yellow-400/15"
-                        : "bg-white/6 hover:bg-white/10 text-white/70 border border-white/10"
-                    }`}
-                    style={{ minHeight: 52 }}
-                  >
-                    {plan.cta}
-                  </button>
+
+                  {/* ── BUTTON: only on website ── */}
+                  {!isApp && (
+                    <button
+                      onClick={() => window.open(plan.payUrl, "_blank")}
+                      className={`w-full sm:w-auto px-6 py-3.5 rounded-xl font-extrabold text-sm transition-all whitespace-nowrap ${
+                        plan.highlight
+                          ? "bg-gradient-to-r from-yellow-400 to-yellow-500 hover:from-yellow-300 hover:to-yellow-400 text-black shadow-lg shadow-yellow-400/15"
+                          : "bg-white/6 hover:bg-white/10 text-white/70 border border-white/10"
+                      }`}
+                      style={{ minHeight: 52 }}
+                    >
+                      {plan.cta}
+                    </button>
+                  )}
+
+                  {/* ── IN APP: text-only, no clickable link ── */}
+                  {isApp && (
+                    <div
+                      className={`w-full sm:w-auto px-6 py-3.5 rounded-xl font-bold text-sm whitespace-nowrap flex items-center justify-center gap-2 border ${
+                        plan.highlight
+                          ? "border-yellow-400/30 bg-yellow-400/5 text-yellow-400/70"
+                          : "border-white/10 bg-white/3 text-white/40"
+                      }`}
+                      style={{ minHeight: 52 }}
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      Buy on colladeai.com
+                    </div>
+                  )}
                 </div>
               </div>
             </motion.div>

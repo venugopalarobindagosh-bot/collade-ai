@@ -1,13 +1,30 @@
 // Supabase Edge Function: career-search
 // Deploy: supabase functions deploy career-search --project-ref xdmofpfxykrxneybdeal
-// Secret:  supabase secrets set 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 --project-ref xdmofpfxykrxneybdeal
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
+
+// ── Rate limit: max 10 requests per user per minute ──
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const RATE_LIMIT_MAX = 10;
+const rateLimitMap = new Map(); // userId -> [timestamps]
+
+function isRateLimited(userId) {
+  const now = Date.now();
+  const timestamps = rateLimitMap.get(userId) || [];
+  const recent = timestamps.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+  if (recent.length >= RATE_LIMIT_MAX) {
+    return true;
+  }
+  recent.push(now);
+  rateLimitMap.set(userId, recent);
+  return false;
+}
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -15,22 +32,129 @@ serve(async (req) => {
   }
 
   try {
+    // ── 1. Verify auth ──
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) {
+      return new Response(
+        JSON.stringify({ error: 'Missing authorization header' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const userClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+      { global: { headers: { Authorization: authHeader } } }
+    );
+
+    const { data: { user }, error: userError } = await userClient.auth.getUser();
+    if (userError || !user) {
+      return new Response(
+        JSON.stringify({ error: 'Unauthorized' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // ── 2. Rate limit ──
+    if (isRateLimited(user.id)) {
+      return new Response(
+        JSON.stringify({ error: 'Too many requests. Please wait a moment.' }),
+        { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // ── 3. Parse request body ──
     const { prompt, query } = await req.json();
     const userQuery = prompt || query;
 
     if (!userQuery) {
-      return new Response(JSON.stringify({ error: 'Missing prompt or query' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return new Response(
+        JSON.stringify({ error: 'Missing prompt or query' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
+    // ── 4. Check + deduct credit (service_role) ──
+    const serviceClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    );
+
+    const { data: creditRow, error: creditError } = await serviceClient
+      .from('user_credits')
+      .select('id, balance, credits_remaining, plan')
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    if (creditError) {
+      console.error('Credit fetch error:', creditError);
+      return new Response(
+        JSON.stringify({ error: 'Failed to verify credits' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (!creditRow) {
+      return new Response(
+        JSON.stringify({ error: 'No credit record found. Please contact support.' }),
+        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const isPremium = creditRow.plan === 'premium';
+    const currentBalance = Number(creditRow.balance ?? creditRow.credits_remaining ?? 0);
+
+    if (!isPremium && currentBalance < 1) {
+      return new Response(
+        JSON.stringify({
+          error: 'out_of_credits',
+          message: 'You have run out of credits. Please upgrade to continue.',
+          credits_remaining: 0,
+        }),
+        { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    let newBalance = currentBalance;
+    if (!isPremium) {
+      newBalance = currentBalance - 1;
+      const { error: updateError } = await serviceClient
+        .from('user_credits')
+        .update({
+          balance: newBalance,
+          credits_remaining: newBalance,
+          access_locked: newBalance <= 0,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', creditRow.id);
+
+      if (updateError) {
+        console.error('Credit deduction error:', updateError);
+        return new Response(
+          JSON.stringify({ error: 'Failed to deduct credit' }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+
+    // ── 5. Call Groq ──
     const groqKey = Deno.env.get('GROQ_API_KEY');
     if (!groqKey) {
-      return new Response(JSON.stringify({ error: 'GROQ_API_KEY not configured' }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      if (!isPremium) {
+        await serviceClient
+          .from('user_credits')
+          .update({
+            balance: currentBalance,
+            credits_remaining: currentBalance,
+            access_locked: currentBalance <= 0,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', creditRow.id);
+      }
+      return new Response(
+        JSON.stringify({ error: 'GROQ_API_KEY not configured' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
     const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -40,7 +164,7 @@ serve(async (req) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'qwen/qwen3.8-27b',
+        model: 'qwen/qwen3-32b',
         messages: [
           {
             role: 'system',
@@ -72,23 +196,44 @@ If you don't know a specific number, say "The data is uncertain, but typically r
 
     if (!groqRes.ok) {
       console.error('Groq error:', groqData);
-      return new Response(JSON.stringify({ error: groqData?.error?.message || 'Groq API error' }), {
-        status: groqRes.status,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+
+      if (!isPremium) {
+        await serviceClient
+          .from('user_credits')
+          .update({
+            balance: currentBalance,
+            credits_remaining: currentBalance,
+            access_locked: currentBalance <= 0,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', creditRow.id);
+      }
+
+      return new Response(
+        JSON.stringify({ error: groqData?.error?.message || 'Groq API error' }),
+        { status: groqRes.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
     const answer = groqData.choices?.[0]?.message?.content || '';
 
-    return new Response(JSON.stringify({ answer, result: answer, response: answer }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    // ── 6. Return answer + updated credit balance ──
+    return new Response(
+      JSON.stringify({
+        answer,
+        result: answer,
+        response: answer,
+        credits_remaining: isPremium ? null : newBalance,
+        premium: isPremium,
+      }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
 
   } catch (err) {
     console.error('career-search error:', err);
-    return new Response(JSON.stringify({ error: err.message }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return new Response(
+      JSON.stringify({ error: err.message }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
   }
 });

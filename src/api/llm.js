@@ -5,6 +5,15 @@ const FUNCTION_NAME = 'career-search';
 const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const BASE_URL = import.meta.env.VITE_SUPABASE_URL;
 
+// Custom error for "out of credits" so pages can react appropriately
+export class OutOfCreditsError extends Error {
+  constructor(message = 'You have run out of credits. Please upgrade to continue.') {
+    super(message);
+    this.name = 'OutOfCreditsError';
+    this.code = 'out_of_credits';
+  }
+}
+
 function parseAIResponse(data) {
   if (data == null) return '';
   if (typeof data === 'string') return data;
@@ -15,6 +24,23 @@ function parseAIResponse(data) {
   if (data.answer !== undefined) return data.answer;
   if (data.message !== undefined) return data.message;
   return data;
+}
+
+/**
+ * Broadcast the new credit balance to any component listening.
+ * useCredits() will pick this up and re-render.
+ */
+function broadcastCreditsUpdate(creditsRemaining, premium) {
+  if (creditsRemaining === undefined || creditsRemaining === null) return;
+  try {
+    window.dispatchEvent(
+      new CustomEvent('collade:credits-updated', {
+        detail: { credits_remaining: creditsRemaining, premium: !!premium },
+      })
+    );
+  } catch (e) {
+    // window not available (SSR) — ignore
+  }
 }
 
 async function callEdgeFunction(body, accessToken) {
@@ -36,17 +62,38 @@ async function callEdgeFunction(body, accessToken) {
   const text = await res.text();
   console.log('[AI] Response status:', res.status);
 
+  // ── Handle specific status codes ──
+  if (res.status === 402) {
+    // Out of credits
+    let msg = 'You have run out of credits. Please upgrade to continue.';
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed?.message) msg = parsed.message;
+      broadcastCreditsUpdate(0, false);
+    } catch (e) {}
+    throw new OutOfCreditsError(msg);
+  }
+
+  if (res.status === 429) {
+    // Rate limited
+    const err = new Error('Too many requests. Please wait a moment and try again.');
+    err.status = 429;
+    throw err;
+  }
+
   if (!res.ok) {
     const err = new Error(text || `AI request failed (${res.status})`);
     err.status = res.status;
     throw err;
   }
 
+  let parsed;
   try {
-    return JSON.parse(text);
+    parsed = JSON.parse(text);
   } catch {
-    return text;
+    return { raw: text };
   }
+  return parsed;
 }
 
 export async function invokeLLM({ prompt, response_json_schema, add_context_from_internet }) {
@@ -72,8 +119,15 @@ export async function invokeLLM({ prompt, response_json_schema, add_context_from
   try {
     const data = await callEdgeFunction(body, accessToken);
     console.log('[AI] Success');
+
+    // Server returns credits_remaining — broadcast to UI
+    if (data && typeof data === 'object') {
+      broadcastCreditsUpdate(data.credits_remaining, data.premium);
+    }
+
     return parseAIResponse(data);
   } catch (firstErr) {
+    // Don't retry on 401, 402, 429
     if (firstErr.status !== 401) {
       console.error('[AI] Request failed:', firstErr.message);
       throw firstErr;
@@ -90,6 +144,11 @@ export async function invokeLLM({ prompt, response_json_schema, add_context_from
     try {
       const data = await callEdgeFunction(body, refreshed.session.access_token);
       console.log('[AI] Success after token refresh');
+
+      if (data && typeof data === 'object') {
+        broadcastCreditsUpdate(data.credits_remaining, data.premium);
+      }
+
       return parseAIResponse(data);
     } catch (retryErr) {
       console.error('[AI] Retry failed:', retryErr.message);

@@ -58,6 +58,9 @@ const AppRoutes = () => {
   const [authChecked, setAuthChecked] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
 
+  // Detect if running inside Capacitor native app
+  const isApp = typeof window !== "undefined" && window.Capacitor?.isNativePlatform?.() === true;
+
   useEffect(() => {
     isAuthenticated()
       .then(authed => {

@@ -1,7 +1,7 @@
 import { motion } from "framer-motion";
 import { ArrowRight } from "lucide-react";
 
-export default function FinalCTA({ onLogin }) {
+export default function FinalCTA({ onLogin, isApp = false }) {
   return (
     <section className="w-full py-14 px-4 bg-black border-t border-white/8 relative overflow-hidden">
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-xl h-64 bg-yellow-400/5 rounded-full blur-3xl pointer-events-none" />
@@ -16,7 +16,11 @@ export default function FinalCTA({ onLogin }) {
           <span className="bg-gradient-to-r from-yellow-300 to-yellow-500 bg-clip-text text-transparent">Start Planning It.</span>
         </motion.h2>
         <p className="text-white/50 text-base mb-2">Join 500+ students who found their career path with Collade AI.</p>
-        <p className="text-white/30 text-sm mb-8">No credit card required. Sign in with Google.</p>
+        <p className="text-white/30 text-sm mb-8">
+          {isApp
+            ? "Log in with the account you created on colladeai.com."
+            : "No credit card required. Sign in with Google."}
+        </p>
 
         <button
           onClick={onLogin}

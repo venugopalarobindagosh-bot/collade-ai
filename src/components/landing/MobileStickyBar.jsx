@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
-export default function MobileStickyBar({ onLogin }) {
+export default function MobileStickyBar({ onLogin, isApp = false }) {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
@@ -26,9 +26,11 @@ export default function MobileStickyBar({ onLogin }) {
             className="w-full bg-gradient-to-r from-yellow-400 to-yellow-500 text-black py-4 rounded-xl font-extrabold text-base shadow-lg shadow-yellow-400/20"
             style={{ minHeight: 52 }}
           >
-            Sign In with Google — Free →
+            {isApp ? "Log In →" : "Sign In with Google — Free →"}
           </button>
-          <p className="text-center text-white/30 text-xs mt-2">5 free credits. No card needed.</p>
+          <p className="text-center text-white/30 text-xs mt-2">
+            {isApp ? "Log in with your colladeai.com account" : "5 free credits. No card needed."}
+          </p>
         </motion.div>
       )}
     </AnimatePresence>

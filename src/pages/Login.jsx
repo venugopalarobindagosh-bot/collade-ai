@@ -1,18 +1,30 @@
 import { useState, useEffect } from 'react';
-import { useSearchParams, Navigate } from 'react-router-dom';
-import { Compass, Loader2, Mail } from 'lucide-react';
+import { useSearchParams, Navigate, useLocation } from 'react-router-dom';
+import { Compass, Loader2, Mail, Lock, User, AlertCircle } from 'lucide-react';
 import { supabase } from '@/api/supabaseClient';
-import { signInWithGoogle, signInWithEmail, isAuthenticated } from '@/lib/auth';
+import { signInWithGoogle, signInWithEmail, signUpWithEmail, isAuthenticated } from '@/lib/auth';
 
 export default function Login() {
   const [searchParams] = useSearchParams();
+  const location = useLocation();
   const redirect = searchParams.get('redirect') || '/dashboard';
+
+  // Detect if running inside Capacitor native app
+  const isApp = typeof window !== 'undefined' && window.Capacitor?.isNativePlatform?.() === true;
+
+  // Login-only mode when running in the app (Google Play compliance)
+  const forceLoginOnly = isApp;
+
+  const [mode, setMode] = useState('signin'); // 'signin' | 'signup'
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [fullName, setFullName] = useState('');
   const [loading, setLoading] = useState(false);
-  const [sent, setSent] = useState(false);
   const [error, setError] = useState('');
   const [checking, setChecking] = useState(true);
   const [authed, setAuthed] = useState(false);
+
+  const effectiveMode = forceLoginOnly ? 'signin' : mode;
 
   useEffect(() => {
     isAuthenticated().then(ok => {
@@ -50,17 +62,20 @@ export default function Login() {
     }
   };
 
-  const handleEmail = async (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!email.trim()) return;
+    if (!email.trim() || !password) return;
     setLoading(true);
     setError('');
     try {
-      await signInWithEmail(email.trim(), redirect);
-      setSent(true);
-    } catch (e) {
-      setError(e.message || 'Could not send magic link');
-    } finally {
+      if (effectiveMode === 'signup') {
+        await signUpWithEmail(email.trim(), password, fullName.trim());
+      } else {
+        await signInWithEmail(email.trim(), password);
+      }
+      // onAuthStateChange will redirect
+    } catch (err) {
+      setError(err.message || 'Something went wrong');
       setLoading(false);
     }
   };
@@ -72,18 +87,21 @@ export default function Login() {
           <div className="h-14 w-14 rounded-2xl bg-yellow-400 flex items-center justify-center mx-auto mb-4">
             <Compass className="h-7 w-7 text-black" />
           </div>
-          <h1 className="font-heading text-3xl font-bold mb-2">Welcome to Collade AI</h1>
-          <p className="text-white/50 text-sm">Sign in to explore careers, degrees, and your future</p>
+          <h1 className="font-heading text-3xl font-bold mb-2">
+            {effectiveMode === 'signup' ? 'Create your account' : 'Welcome back'}
+          </h1>
+          <p className="text-white/50 text-sm">
+            {forceLoginOnly
+              ? 'Log in with the account you created on colladeai.com'
+              : effectiveMode === 'signup'
+                ? 'Sign up to explore careers, degrees, and your future'
+                : 'Sign in to continue your career journey'}
+          </p>
         </div>
 
         <div className="bg-white/5 border border-white/10 rounded-2xl p-6 space-y-4">
-          {sent ? (
-            <div className="text-center py-4">
-              <Mail className="h-10 w-10 text-yellow-400 mx-auto mb-3" />
-              <p className="font-semibold mb-1">Check your email</p>
-              <p className="text-sm text-white/50">We sent a magic link to <span className="text-white">{email}</span></p>
-            </div>
-          ) : (
+          {/* Google button — ONLY on website */}
+          {!forceLoginOnly && (
             <>
               <button
                 onClick={handleGoogle}
@@ -106,29 +124,96 @@ export default function Login() {
                 <span className="text-xs text-white/30">or</span>
                 <div className="flex-1 h-px bg-white/10" />
               </div>
-
-              <form onSubmit={handleEmail} className="space-y-3">
-                <input
-                  type="email"
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  placeholder="Enter your email"
-                  required
-                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-yellow-400/30"
-                />
-                <button
-                  type="submit"
-                  disabled={loading || !email.trim()}
-                  className="w-full bg-gradient-to-r from-yellow-400 to-yellow-500 text-black py-3 rounded-xl font-semibold text-sm disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
-                  Send Magic Link
-                </button>
-              </form>
             </>
           )}
 
-          {error && <p className="text-red-400 text-xs text-center">{error}</p>}
+          <form onSubmit={handleSubmit} className="space-y-3">
+            {effectiveMode === 'signup' && (
+              <div className="relative">
+                <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/30" />
+                <input
+                  type="text"
+                  value={fullName}
+                  onChange={e => setFullName(e.target.value)}
+                  placeholder="Full name"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-3 text-sm placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-yellow-400/30"
+                />
+              </div>
+            )}
+
+            <div className="relative">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/30" />
+              <input
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="Email address"
+                required
+                className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-3 text-sm placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-yellow-400/30"
+              />
+            </div>
+
+            <div className="relative">
+              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/30" />
+              <input
+                type="password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="Password"
+                required
+                minLength={6}
+                className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-3 text-sm placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-yellow-400/30"
+              />
+            </div>
+
+            {error && (
+              <div className="flex items-start gap-2 bg-red-500/10 border border-red-500/20 rounded-xl p-3 text-red-400 text-xs">
+                <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading || !email.trim() || !password}
+              className="w-full bg-gradient-to-r from-yellow-400 to-yellow-500 text-black py-3 rounded-xl font-semibold text-sm disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {loading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : effectiveMode === 'signup' ? (
+                'Create Account'
+              ) : (
+                'Sign In'
+              )}
+            </button>
+          </form>
+
+          {/* Signup/signin toggle — HIDDEN in app */}
+          {!forceLoginOnly && (
+            <div className="text-center pt-2">
+              <button
+                onClick={() => {
+                  setMode(mode === 'signup' ? 'signin' : 'signup');
+                  setError('');
+                }}
+                className="text-white/50 hover:text-white text-sm transition-colors"
+              >
+                {mode === 'signup'
+                  ? 'Already have an account? Sign in'
+                  : "Don't have an account? Sign up"}
+              </button>
+            </div>
+          )}
+
+          {/* App-only hint */}
+          {forceLoginOnly && (
+            <div className="mt-4 p-3 bg-yellow-400/5 border border-yellow-400/20 rounded-xl">
+              <p className="text-yellow-400/80 text-xs text-center leading-relaxed">
+                Don't have an account yet?<br />
+                Visit <span className="font-semibold">colladeai.com</span> to sign up.
+              </p>
+            </div>
+          )}
         </div>
 
         <p className="text-center text-xs text-white/30 mt-6">

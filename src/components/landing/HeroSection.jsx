@@ -33,23 +33,20 @@ const URGENCY_STATS = [
   { num: "30 sec", label: "to get your personalised career match" },
 ];
 
-export default function HeroSection({ quizStep, quizStarted, onAnswer, onStartQuiz, onLogin }) {
+export default function HeroSection({ quizStep, quizStarted, onAnswer, onStartQuiz, onLogin, isApp = false }) {
   return (
     <section className="w-full pt-20 pb-12 px-4 bg-black relative overflow-hidden">
-      {/* Background glow */}
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-3xl h-96 bg-yellow-500/6 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute top-32 right-0 w-48 h-48 bg-yellow-400/3 rounded-full blur-2xl pointer-events-none hidden sm:block" />
 
       <div className="max-w-2xl mx-auto relative">
 
-        {/* Urgency pill */}
         <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="flex justify-center mb-5">
           <span className="inline-flex items-center gap-2 bg-red-500/10 border border-red-500/30 text-red-400 text-xs sm:text-sm px-4 py-2 rounded-full font-bold animate-pulse">
             ⚠️ 90% of students are choosing careers AI will automate
           </span>
         </motion.div>
 
-        {/* Headline */}
         <motion.h1
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
@@ -73,7 +70,6 @@ export default function HeroSection({ quizStep, quizStarted, onAnswer, onStartQu
           See <strong className="text-white">what to study</strong>, what it leads to, <strong className="text-white">how much you'll earn</strong>, and where you can work — in under 30 seconds.
         </motion.p>
 
-        {/* Stats bar */}
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
@@ -88,7 +84,6 @@ export default function HeroSection({ quizStep, quizStarted, onAnswer, onStartQu
           ))}
         </motion.div>
 
-        {/* Value bullets */}
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
@@ -103,7 +98,6 @@ export default function HeroSection({ quizStep, quizStarted, onAnswer, onStartQu
           ))}
         </motion.div>
 
-        {/* Quiz Widget */}
         <motion.div
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
@@ -128,7 +122,11 @@ export default function HeroSection({ quizStep, quizStarted, onAnswer, onStartQu
               >
                 Start with 5 Free Credits →
               </button>
-              <p className="text-sm text-white/30 mt-3">No credit card. No sign-up required to take the quiz.</p>
+              <p className="text-sm text-white/30 mt-3">
+                {isApp
+                  ? "Sign in to get 5 free credits. Pay on colladeai.com to unlock more."
+                  : "No credit card. No sign-up required to take the quiz."}
+              </p>
             </div>
           )}
 
@@ -182,14 +180,17 @@ export default function HeroSection({ quizStep, quizStarted, onAnswer, onStartQu
               >
                 Start with 5 Free Credits →
               </button>
-              <p className="text-sm text-white/30 mt-3">Google Sign-In · No credit card required</p>
+              <p className="text-sm text-white/30 mt-3">
+                {isApp
+                  ? "Log in with the account you created on colladeai.com"
+                  : "Google Sign-In · No credit card required"}
+              </p>
             </motion.div>
           )}
         </motion.div>
 
-        {/* Trust row */}
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.35 }} className="flex flex-wrap justify-center gap-3 mt-5 text-sm text-white/30">
-          {["✅ 500+ students enrolled", "🔒 Google Sign-In", "🚫 No subscription ever"].map((t) => (
+          {["✅ 500+ students enrolled", "🔒 Secure Sign-In", "🚫 No subscription ever"].map((t) => (
             <span key={t}>{t}</span>
           ))}
         </motion.div>

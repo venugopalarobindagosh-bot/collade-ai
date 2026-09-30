@@ -2,9 +2,6 @@ import { useState, useEffect, useCallback } from "react";
 import { getCurrentUser } from "@/lib/auth";
 import {
   fetchUserCredits,
-  createUserCredits,
-  updateUserCreditsByUserId,
-  deductUserCredits,
   creditsStateFromRecord,
   shouldShowPayments,
 } from "@/api/credits";
@@ -35,7 +32,7 @@ async function fetchCredits() {
   let record = await fetchUserCredits();
 
   if (!record) {
-    console.warn("[useCredits] No DB row — NOT auto-creating. Add row in Supabase with user_id:", me.id);
+    console.warn("[useCredits] No DB row — showing empty state");
     return {
       credits_remaining: 0,
       plan: "free",
@@ -52,27 +49,29 @@ async function fetchCredits() {
   let credits = record.credits_remaining;
   if (credits < 0) credits = 0;
 
-  if (plan === "premium" && record.subscription_expiry && new Date(record.subscription_expiry) < new Date()) {
+  // Check expiry locally — no DB write needed
+  const isPremiumExpired =
+    plan === "premium" &&
+    record.subscription_expiry &&
+    new Date(record.subscription_expiry) < new Date();
+
+  if (isPremiumExpired) {
+    console.log("[useCredits] Premium expired — showing as free");
     plan = "free";
     credits = 0;
-    record = await updateUserCreditsByUserId(me.id, { plan: "free", balance: 0, credits_remaining: 0 });
   }
 
   const state = creditsStateFromRecord({ ...record, plan, credits_remaining: credits });
 
-  // Auto-dismiss welcome for existing users with >5 credits
+  // Local welcome flag — no DB write
   if (!state.welcome_shown && state.credits_remaining > 5) {
+    state.welcome_shown = true;
     try {
-      await updateUserCreditsByUserId(me.id, { welcome_shown: true });
-      state.welcome_shown = true;
       localStorage.setItem(`collade_welcome_shown_${me.id}`, "true");
-      console.log("[useCredits] Auto-marked welcome_shown (user has", state.credits_remaining, "credits)");
-    } catch (e) {
-      console.warn("[useCredits] Could not auto-set welcome_shown:", e.message);
-    }
+    } catch (e) {}
   }
 
-  console.log("[useCredits] Loaded:", state.credits_remaining, "credits, welcome_shown:", state.welcome_shown);
+  console.log("[useCredits] Loaded:", state.credits_remaining, "credits");
   return state;
 }
 
@@ -109,6 +108,23 @@ export function useCredits() {
     if (cachedCredits) setState({ ...cachedCredits });
     loadOnce().catch(() => {});
 
+    // ── Listen for credit updates from the edge function (via llm.js) ──
+    const onCreditsUpdated = (e) => {
+      const { credits_remaining, premium } = e.detail || {};
+      if (credits_remaining === undefined || credits_remaining === null) return;
+
+      const next = {
+        ...(cachedCredits || DEFAULT_STATE),
+        credits_remaining: premium ? 9999 : credits_remaining,
+        plan: premium ? "premium" : (cachedCredits?.plan || "free"),
+        access_locked: !premium && credits_remaining <= 0,
+        _loaded: true,
+      };
+      broadcast(next);
+      console.log("[useCredits] Credits updated from server:", credits_remaining, "premium:", premium);
+    };
+    window.addEventListener("collade:credits-updated", onCreditsUpdated);
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
       if (event === "TOKEN_REFRESHED") return;
       if (event === "SIGNED_OUT") {
@@ -124,9 +140,18 @@ export function useCredits() {
       }
     });
 
-    return () => listeners.delete(setState);
+    return () => {
+      listeners.delete(setState);
+      window.removeEventListener("collade:credits-updated", onCreditsUpdated);
+      subscription.unsubscribe();
+    };
   }, []);
 
+  /**
+   * ⚠️ NO-OP: Credit deduction happens server-side inside the
+   * `career-search` edge function. This function is kept for API
+   * compatibility with existing pages that call `deductCredit()`.
+   */
   const deductCredit = useCallback(async () => {
     setDeductError(null);
     let waited = 0;
@@ -135,39 +160,23 @@ export function useCredits() {
       waited += 100;
     }
 
-    const previous = cachedCredits ? { ...cachedCredits } : null;
-    setDeducting(true);
-
-    try {
-      const { deducted, premium } = await deductUserCredits(1);
-      if (premium) return true;
-      if (!deducted) { setDeductError("Out of credits"); return false; }
-
-      sharedFetchPromise = null;
-      const fresh = await fetchUserCredits();
-      if (!fresh) throw new Error("Could not verify deduction");
-      broadcast(creditsStateFromRecord(fresh));
-      return true;
-    } catch (err) {
-      setDeductError(err?.message || "Deduction failed");
-      if (previous) broadcast(previous);
+    const cached = cachedCredits;
+    if (cached && cached.plan !== "premium" && (cached.credits_remaining ?? 0) <= 0) {
+      setDeductError("Out of credits");
       return false;
-    } finally {
-      setDeducting(false);
     }
+
+    return true;
   }, []);
 
   const markWelcomeShown = useCallback(async () => {
     const me = await getCurrentUser();
     if (!me?.id) return;
+    // Local-only — no DB write
     broadcast({ ...(cachedCredits || DEFAULT_STATE), welcome_shown: true, _loaded: true });
-    localStorage.setItem(`collade_welcome_shown_${me.id}`, "true");
     try {
-      const updated = await updateUserCreditsByUserId(me.id, { welcome_shown: true });
-      broadcast(creditsStateFromRecord(updated));
-    } catch (e) {
-      console.warn("[useCredits] markWelcomeShown:", e.message);
-    }
+      localStorage.setItem(`collade_welcome_shown_${me.id}`, "true");
+    } catch (e) {}
   }, []);
 
   const refetch = useCallback(async () => {
