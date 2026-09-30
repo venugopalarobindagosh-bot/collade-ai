@@ -3,7 +3,6 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
 import { BrowserRouter as Router, Route, Routes, useLocation, Navigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { useEffect, useState } from 'react';
 import PageNotFound from './lib/PageNotFound';
 import Layout from './components/Layout';
 import Landing from './pages/Landing';
@@ -32,7 +31,7 @@ import DeleteAccount from './pages/DeleteAccount';
 import Privacy from './pages/Privacy';
 import Success from './pages/Success';
 import Login from './pages/Login';
-import { isAuthenticated } from '@/lib/auth';
+import { AuthProvider, useAuth } from '@/lib/AuthContext';
 
 // Shown while we check auth — prevents any flash of wrong page
 const AuthSpinner = () => (
@@ -52,39 +51,23 @@ const PageTransition = ({ children }) => (
   </motion.div>
 );
 
+// Public paths that don't require auth
+const PUBLIC_PATHS = ["/", "/login", "/success", "/success-starter", "/success-pro", "/success-unlimited", "/delete-account", "/privacy"];
+
 const AppRoutes = () => {
   const location = useLocation();
-  // null = still checking, true = logged in, false = not logged in
-  const [authChecked, setAuthChecked] = useState(false);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  // ✅ Uses AuthContext — updates live when auth state changes
+  const { isAuthenticated: isLoggedIn, isLoadingAuth } = useAuth();
 
-  // Detect if running inside Capacitor native app
-  const isApp = typeof window !== "undefined" && window.Capacitor?.isNativePlatform?.() === true;
-
-  useEffect(() => {
-    isAuthenticated()
-      .then(authed => {
-        setIsLoggedIn(!!authed);
-        setAuthChecked(true);
-      })
-      .catch(() => {
-        setIsLoggedIn(false);
-        setAuthChecked(true);
-      });
-  }, []);
-
-  // Always show spinner until we know auth state — no flash possible
-  if (!authChecked) return <AuthSpinner />;
+  // Show spinner while auth is loading
+  if (isLoadingAuth) return <AuthSpinner />;
 
   // Logged-in user hits "/" → send to dashboard
   if (isLoggedIn && location.pathname === "/") {
     return <Navigate to="/dashboard" replace />;
   }
 
-  // Allow success pages without auth
-  const PUBLIC_PATHS = ["/", "/login", "/success", "/success-starter", "/success-pro", "/success-unlimited", "/delete-account", "/privacy"];
-
-  // Unauthenticated user hits any protected route → redirect to "/"
+  // Unauthenticated user hits protected route → redirect to landing
   if (!isLoggedIn && !PUBLIC_PATHS.includes(location.pathname)) {
     return <Navigate to="/" replace />;
   }
@@ -133,12 +116,14 @@ const AppRoutes = () => {
 
 function App() {
   return (
-    <QueryClientProvider client={queryClientInstance}>
-      <Router>
-        <AppRoutes />
-      </Router>
-      <Toaster />
-    </QueryClientProvider>
+    <AuthProvider>
+      <QueryClientProvider client={queryClientInstance}>
+        <Router>
+          <AppRoutes />
+        </Router>
+        <Toaster />
+      </QueryClientProvider>
+    </AuthProvider>
   );
 }
 
