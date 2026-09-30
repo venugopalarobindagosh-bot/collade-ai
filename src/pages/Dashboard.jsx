@@ -9,7 +9,7 @@ import { Link } from "react-router-dom";
 const BUY_PLANS = [
   { id: "basic", label: "Starter", price: "₹500", payUrl: "https://rzp.io/rzp/EFCpj3Eb", credits: 50, icon: Zap, color: "#3B82F6", desc: "50 credits" },
   { id: "pro", label: "Pro", price: "₹1,000", payUrl: "https://rzp.io/rzp/tOlFbsLQ", credits: 500, icon: Star, color: "#8B5CF6", desc: "500 credits", popular: true },
-  { id: "premium", label: "Unlimited", price: "₹5,000", payUrl: "https://rzp.io/rzp/JzTyh74C", credits: null, icon: Crown, color: "#F59E0B", desc: "6 months unlimited" },
+  { id: "premium", label: "Premium", price: "₹5,000", payUrl: "https://rzp.io/rzp/JzTyh74C", credits: 5000, icon: Crown, color: "#F59E0B", desc: "5,000 credits" },
 ];
 
 const QUICK_LINKS = [
@@ -17,7 +17,7 @@ const QUICK_LINKS = [
   { path: "/explore-topics", label: "Explore by Topic", emoji: "🧭" },
   { path: "/interest-matcher", label: "Interest Matcher", emoji: "✨" },
   { path: "/dream-location", label: "Dream Location", emoji: "📍" },
-  { path: "/trends", label: "Future Trends", emoji: "📈" },
+  { path: "/trends", label: "Future Trends", emoji: "📈"},
   { path: "/compare", label: "Compare Careers", emoji: "⚖️" },
   { path: "/future-score", label: "AI-Proof Score", emoji: "🛡️" },
   { path: "/career-simulator", label: "Career Simulator", emoji: "🚀" },
@@ -26,7 +26,7 @@ const QUICK_LINKS = [
 ];
 
 export default function Dashboard() {
-  const { credits_remaining, plan, _loaded, deductCredit, deducting, deductError, isPremium, showPaymentOptions } = useCredits();
+  const { credits_remaining, plan, _loaded, deductCredit, deducting, deductError, showPaymentOptions } = useCredits();
   const [search, setSearch] = useState("");
   const [searchResult, setSearchResult] = useState(null);
   const [searchError, setSearchError] = useState("");
@@ -39,7 +39,7 @@ export default function Dashboard() {
     }).catch(() => {});
   }, []);
 
-  const creditsDisplay = isPremium ? "∞" : (credits_remaining ?? 0);
+  const creditsDisplay = credits_remaining ?? 0;
 
   const handleSearch = async () => {
     if (!search.trim() || searching) return;
@@ -99,16 +99,14 @@ RULES: NEVER say "varies". NEVER say "it depends" without specifics. ALWAYS use 
             <p className="text-muted-foreground text-sm mt-1">Your AI-powered career guidance dashboard</p>
           </div>
           <div className="flex items-center gap-3 bg-card border border-border rounded-xl px-5 py-3 self-start sm:self-auto">
-            <div className={`h-10 w-10 rounded-xl flex items-center justify-center ${isPremium ? "bg-amber-500/20" : "bg-primary/10"}`}>
-              {isPremium ? <Crown className="h-5 w-5 text-amber-500" /> : <Zap className="h-5 w-5 text-primary" />}
+            <div className="h-10 w-10 rounded-xl flex items-center justify-center bg-primary/10">
+              <Zap className="h-5 w-5 text-primary" />
             </div>
             <div>
               {_loaded ? (
                 <>
                   <p className="font-heading font-bold text-2xl leading-none">{creditsDisplay}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {isPremium ? "Unlimited plan" : "credits remaining"}
-                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">credits remaining</p>
                 </>
               ) : (
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -117,12 +115,12 @@ RULES: NEVER say "varies". NEVER say "it depends" without specifics. ALWAYS use 
           </div>
         </div>
 
-        {_loaded && !isPremium && credits_remaining <= 5 && credits_remaining > 0 && (
+        {_loaded && credits_remaining <= 5 && credits_remaining > 0 && (
           <div className="mt-3 inline-flex items-center gap-1.5 bg-green-500/10 border border-green-500/20 text-green-600 dark:text-green-400 text-xs px-3 py-1.5 rounded-full">
             <CheckCircle2 className="h-3 w-3" /> You received 5 free credits to get started!
           </div>
         )}
-        {_loaded && !isPremium && credits_remaining === 0 && (
+        {_loaded && credits_remaining === 0 && (
           <div className="mt-3 inline-flex items-center gap-1.5 bg-destructive/10 border border-destructive/20 text-destructive text-xs px-3 py-1.5 rounded-full">
             <Zap className="h-3 w-3" /> Out of credits — buy more below to continue
           </div>
@@ -147,7 +145,7 @@ RULES: NEVER say "varies". NEVER say "it depends" without specifics. ALWAYS use 
           />
           <button
             onClick={handleSearch}
-            disabled={!search.trim() || searching || deducting || (!isPremium && credits_remaining <= 0)}
+            disabled={!search.trim() || searching || deducting || credits_remaining <= 0}
             className="bg-primary text-primary-foreground px-5 py-3 rounded-xl font-semibold text-sm flex items-center gap-2 disabled:opacity-40 shadow-lg shadow-primary/20 hover:opacity-90 transition-opacity"
           >
             {searching || deducting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
@@ -190,7 +188,7 @@ RULES: NEVER say "varies". NEVER say "it depends" without specifics. ALWAYS use 
                   )}
                   <div className="flex items-center gap-3 mb-3">
                     <div className="h-9 w-9 rounded-lg flex items-center justify-center" style={{ backgroundColor: p.color + "22" }}>
-                      <Icon className="h-4 w-4" style={{ color: p.color }} />
+                      <Icon className="h-4 w-4" style={{color: p.color }} />
                     </div>
                     <div>
                       <p className="font-semibold text-sm">{p.label}</p>
