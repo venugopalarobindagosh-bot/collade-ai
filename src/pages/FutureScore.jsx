@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { Shield, Search, Loader2, TrendingUp, Zap, AlertTriangle } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 import { useCredits } from "@/hooks/useCredits";
 import FeatureGate from "../components/FeatureGate";
 import { invokeLLM } from "@/api/llm";
+import { parseAIResponse, extractArray } from "@/lib/aiResponseHandler";
 import SectionHeader from "../components/SectionHeader";
 import LoadingGrid from "../components/LoadingGrid";
 import { motion } from "framer-motion";
@@ -17,6 +19,7 @@ export default function FutureScore() {
   const { deductCredit } = useCredits();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState(null);
+  const [markdownFallback, setMarkdownFallback] = useState("");
   const [loading, setLoading] = useState(false);
   const [sortBy, setSortBy] = useState("score");
   const [error, setError] = useState(null);
@@ -24,70 +27,55 @@ export default function FutureScore() {
   const analyze = async (term) => {
     const q = term || query.trim();
     if (!q) return;
-    
+
     const spent = await deductCredit();
-    if (!spent) { 
-      window.dispatchEvent(new CustomEvent("collade:upgrade")); 
-      return; 
+    if (!spent) {
+      window.dispatchEvent(new CustomEvent("collade:upgrade"));
+      return;
     }
-    
+
     setLoading(true);
     setResults(null);
+    setMarkdownFallback("");
     setError(null);
-    
+
     try {
       const prompt = `Analyze the AI-future-proofing potential of: "${q}". Generate a comprehensive AI Future-Proof Scorecard.
 
-Provide scores and analysis for the main field AND 5-6 related specializations/sub-fields. Rate each on:
-- AI-proof score (1-10, where 10 = very safe from AI disruption)
-- Risk level (Low/Medium/High)
-- Growth potential (%)
-- Time horizon (years until significant AI impact)
-
-Be realistic and data-driven based on current AI trends (2025-2030).
+Provide scores and analysis for the main field AND 5-6 related specializations/sub-fields. Rate each on AI-proof score (1-10), risk level, growth potential (%), and time horizon.
 
 Return a JSON object with:
 - main_field (string)
 - overview (string)
-- scorecards (array of: course_name, AI_proof_score, risk_level, growth_potential, time_horizon, key_reason, safe_skills)
-- recommendation (string)`;
+- scorecards (array of: course_name, AI_proof_score, risk_level, growth_potential, time_horizon, key_reason, safe_skills (array))
+- recommendation (string)
 
-      const response = await invokeLLM({ 
-        prompt: prompt,
-        query: prompt
-      });
+IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
 
+      const response = await invokeLLM({ prompt, query: prompt });
       console.log('[FutureScore] Raw response:', response);
 
-      let parsedData = null;
-      if (typeof response === 'string') {
-        const jsonMatch = response.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          try {
-            parsedData = JSON.parse(jsonMatch[0]);
-          } catch (e) {
-            console.error('[FutureScore] JSON parse error:', e);
-          }
-        }
-      } else if (typeof response === 'object') {
-        parsedData = response;
+      const parsed = parseAIResponse(response);
+      console.log('[FutureScore] Parsed type:', parsed.type);
+
+      if (parsed.type === 'json' && parsed.data) {
+        const scorecards = extractArray(parsed.data, ['scorecards', 'scores', 'results']);
+        setResults({
+          main_field: parsed.data.main_field || q,
+          overview: parsed.data.overview || "",
+          scorecards: scorecards,
+          recommendation: parsed.data.recommendation || "",
+        });
+      } else if (parsed.type === 'markdown') {
+        setMarkdownFallback(parsed.raw);
+      } else {
+        setError("No analysis returned. Please try again.");
       }
-
-      const scoreData = {
-        main_field: parsedData?.main_field || q,
-        overview: parsedData?.overview || "Analysis of future-proof potential for this career path.",
-        scorecards: parsedData?.scorecards || [],
-        recommendation: parsedData?.recommendation || "Continue developing skills that complement AI rather than compete with it."
-      };
-
-      console.log('[FutureScore] Parsed:', scoreData);
-      setResults(scoreData);
-
     } catch (err) {
       console.error('[FutureScore] Error:', err);
       setError(err.message || 'Failed to analyze future-proof score. Please try again.');
-    } finally { 
-      setLoading(false); 
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -106,7 +94,6 @@ Return a JSON object with:
     <div className="space-y-6">
       <SectionHeader title="AI Future-Proof Score" subtitle="See how AI will impact any career — and how to stay ahead" icon={Shield} />
 
-      {/* Search */}
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && analyze()}
@@ -129,7 +116,6 @@ Return a JSON object with:
         Analyze Future-Proof Score
       </button>
 
-      {/* Error Message */}
       {error && (
         <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4 text-destructive">
           <p className="text-sm">{error}</p>
@@ -138,7 +124,7 @@ Return a JSON object with:
 
       {loading && <LoadingGrid text="Scoring with AI trend analysis..." />}
 
-      {!loading && results && (
+      {!loading && results && sorted.length > 0 && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-5">
           {results.overview && (
             <div className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-xl p-5">
@@ -147,7 +133,6 @@ Return a JSON object with:
             </div>
           )}
 
-          {/* Sort */}
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground font-medium">Sort by:</span>
             {["score", "risk"].map(s => (
@@ -177,7 +162,6 @@ Return a JSON object with:
                     </div>
                   </div>
 
-                  {/* Score bar */}
                   <div className="h-2 bg-secondary rounded-full overflow-hidden">
                     <motion.div className={`h-full ${cfg.bar} rounded-full`} initial={{ width: 0 }} animate={{ width: `${((card.AI_proof_score || 5) / 10) * 100}%` }} transition={{ duration: 0.8 }} />
                   </div>
@@ -190,7 +174,7 @@ Return a JSON object with:
                     {card.time_horizon && <span className="flex items-center gap-1 bg-secondary px-2.5 py-1 rounded-md"><Zap className="h-3 w-3" /> {card.time_horizon}</span>}
                   </div>
 
-                  {card.safe_skills && card.safe_skills.length > 0 && (
+                  {card.safe_skills?.length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
                       <span className="text-[11px] text-muted-foreground">Human-proof skills:</span>
                       {card.safe_skills.map((s, j) => <span key={j} className="text-[11px] bg-primary/10 text-primary px-2 py-0.5 rounded-md">{s}</span>)}
@@ -207,6 +191,21 @@ Return a JSON object with:
               <p className="text-sm text-muted-foreground mt-1">{results.recommendation}</p>
             </div>
           )}
+        </motion.div>
+      )}
+
+      {!loading && markdownFallback && !results && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+          <div className="bg-card border border-border rounded-xl p-6 prose prose-invert prose-sm max-w-none
+            prose-headings:text-foreground prose-headings:font-bold
+            prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2
+            prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
+            prose-p:text-muted-foreground prose-p:my-1.5
+            prose-li:text-muted-foreground prose-li:my-0.5
+            prose-strong:text-foreground
+          ">
+            <ReactMarkdown>{markdownFallback}</ReactMarkdown>
+          </div>
         </motion.div>
       )}
     </div>

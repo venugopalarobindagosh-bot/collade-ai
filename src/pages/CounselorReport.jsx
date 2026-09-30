@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
-import { FileText, Download, Loader2, User, GraduationCap, Brain, Target } from "lucide-react";
+import { FileText, Loader2 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 import { useCredits } from "@/hooks/useCredits";
 import FeatureGate from "../components/FeatureGate";
 import { getCurrentUser } from "@/lib/auth";
 import { entities } from "@/api/entities";
 import { invokeLLM } from "@/api/llm";
+import { parseAIResponse, extractArray } from "@/lib/aiResponseHandler";
 import SectionHeader from "../components/SectionHeader";
 import { motion } from "framer-motion";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -15,6 +17,7 @@ export default function CounselorReport() {
   const [studentName, setStudentName] = useState("");
   const [grade, setGrade] = useState("");
   const [report, setReport] = useState(null);
+  const [markdownFallback, setMarkdownFallback] = useState("");
   const [loading, setLoading] = useState(false);
   const [dataLoading, setDataLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -25,20 +28,21 @@ export default function CounselorReport() {
       entities.UserSkill.filter({ created_by: me.email }, "-created_date", 50).then(skls => {
         setSkills(skls || []);
         setDataLoading(false);
-      });
+      }).catch(() => setDataLoading(false));
     });
   }, []);
 
   const generateReport = async () => {
     const spent = await deductCredit();
-    if (!spent) { 
-      window.dispatchEvent(new CustomEvent("collade:upgrade")); 
-      return; 
+    if (!spent) {
+      window.dispatchEvent(new CustomEvent("collade:upgrade"));
+      return;
     }
-    
+
     setLoading(true);
     setError(null);
-    
+    setMarkdownFallback("");
+
     const completedSkills = skills.filter(s => s.status === "completed").map(s => s.skill_name);
     const learningSkills = skills.filter(s => s.status === "learning").map(s => s.skill_name);
     const totalXP = skills.reduce((acc, s) => acc + (s.points || 0), 0);
@@ -52,57 +56,54 @@ Completed Skills: ${completedSkills.join(", ") || "None yet"}
 Currently Learning: ${learningSkills.join(", ") || "None"}
 Total XP Earned: ${totalXP}
 
-You MUST return a structured JSON object with these EXACT fields:
+Return a JSON object with:
+- student_summary (3-4 sentences)
+- skill_progress_analysis (2-3 sentences)
+- recommended_paths (array of 3-5)
+- strengths_observed (array of 4-6)
+- development_areas (array of 3-5)
+- next_steps (array of 5-7)
+- counselor_notes (2-3 sentences)
+- overall_readiness_score ("High", "Good", or "Developing")
 
-- student_summary: 3-4 sentences summarizing the student's progress
-- skill_progress_analysis: 2-3 sentences analyzing skill development
-- recommended_paths: Array of 3-5 specific career paths with reasoning
-- strengths_observed: Array of 4-6 specific strengths with examples
-- development_areas: Array of 3-5 specific areas for improvement
-- next_steps: Array of 5-7 specific actionable steps
-- counselor_notes: 2-3 sentences of professional advice
-- overall_readiness_score: "High", "Good", or "Developing"
+RULES: Be specific and actionable.
 
-RULES: Be specific and actionable. NEVER say "varies". Use real career names and concrete advice. Be encouraging but honest.`;
+IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
 
-      const response = await invokeLLM({ prompt: prompt, query: prompt });
+      const response = await invokeLLM({ prompt, query: prompt });
       console.log('[CounselorReport] Raw response:', response);
 
-      let parsedData = null;
-      if (typeof response === 'string') {
-        const jsonMatch = response.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          try { parsedData = JSON.parse(jsonMatch[0]); } catch (e) { console.error('[CounselorReport] JSON parse error:', e); }
-        }
-      } else if (typeof response === 'object') {
-        parsedData = response;
+      const parsed = parseAIResponse(response);
+      console.log('[CounselorReport] Parsed type:', parsed.type);
+
+      if (parsed.type === 'json' && parsed.data) {
+        const d = parsed.data;
+        setReport({
+          student_name: studentName || "Student",
+          grade: grade || "Not specified",
+          generated_date: new Date().toLocaleDateString(),
+          skills_xp: totalXP,
+          completed_skills: completedSkills,
+          learning_skills: learningSkills,
+          student_summary: d.student_summary || "",
+          skill_progress_analysis: d.skill_progress_analysis || "",
+          recommended_paths: d.recommended_paths || [],
+          strengths_observed: d.strengths_observed || [],
+          development_areas: d.development_areas || [],
+          next_steps: d.next_steps || [],
+          counselor_notes: d.counselor_notes || "",
+          overall_readiness_score: d.overall_readiness_score || "",
+        });
+      } else if (parsed.type === 'markdown') {
+        setMarkdownFallback(parsed.raw);
+      } else {
+        setError("No report generated. Please try again.");
       }
-
-      const reportData = {
-        student_name: studentName || "Student",
-        grade: grade || "Not specified",
-        generated_date: new Date().toLocaleDateString(),
-        skills_xp: totalXP,
-        completed_skills: completedSkills,
-        learning_skills: learningSkills,
-        student_summary: parsedData?.student_summary || "The student is actively exploring career options and building foundational skills. With continued effort, they are on track for a successful career journey.",
-        skill_progress_analysis: parsedData?.skill_progress_analysis || "The student has started building foundational skills relevant to their career interests. Continued development in specific areas will strengthen their profile.",
-        recommended_paths: parsedData?.recommended_paths || ["Explore careers in technology", "Consider data science", "Look into engineering", "Research management roles"],
-        strengths_observed: parsedData?.strengths_observed || ["Curiosity", "Willingness to learn", "Analytical thinking", "Self-motivation"],
-        development_areas: parsedData?.development_areas || ["Time management", "Focus", "Research skills", "Networking"],
-        next_steps: parsedData?.next_steps || ["Explore 3-5 career options in detail", "Build skills in one area", "Apply for internships or shadowing", "Connect with professionals in the field", "Take a career assessment test", "Create a career plan", "Follow up with a career counselor"],
-        counselor_notes: parsedData?.counselor_notes || "Student shows strong potential for career growth. With focused effort and strategic planning, they can build a successful career path.",
-        overall_readiness_score: parsedData?.overall_readiness_score || "Good"
-      };
-
-      console.log('[CounselorReport] Parsed:', reportData);
-      setReport(reportData);
-
     } catch (err) {
       console.error('[CounselorReport] Error:', err);
       setError(err.message || 'Failed to generate report. Please try again.');
-    } finally { 
-      setLoading(false); 
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -203,13 +204,13 @@ RULES: Be specific and actionable. NEVER say "varies". Use real career names and
           ))}
 
           <div className="grid sm:grid-cols-2 gap-4">
-            {report.recommended_paths && report.recommended_paths.length > 0 && (
+            {report.recommended_paths?.length > 0 && (
               <div className="bg-card border border-border rounded-xl p-5">
                 <h3 className="font-heading font-bold text-sm mb-2">🎯 Recommended Career Paths</h3>
                 {report.recommended_paths.map((p, i) => <p key={i} className="text-sm text-muted-foreground">• {p}</p>)}
               </div>
             )}
-            {report.strengths_observed && report.strengths_observed.length > 0 && (
+            {report.strengths_observed?.length > 0 && (
               <div className="bg-card border border-border rounded-xl p-5">
                 <h3 className="font-heading font-bold text-sm mb-2 text-green-600">✅ Strengths Observed</h3>
                 {report.strengths_observed.map((p, i) => <p key={i} className="text-sm text-muted-foreground">• {p}</p>)}
@@ -217,7 +218,7 @@ RULES: Be specific and actionable. NEVER say "varies". Use real career names and
             )}
           </div>
 
-          {report.next_steps && report.next_steps.length > 0 && (
+          {report.next_steps?.length > 0 && (
             <div className="bg-card border border-border rounded-xl p-5">
               <h3 className="font-heading font-bold mb-3">📌 Next Steps & Action Items</h3>
               <div className="space-y-2">
@@ -232,6 +233,21 @@ RULES: Be specific and actionable. NEVER say "varies". Use real career names and
           )}
 
           <p className="text-xs text-muted-foreground text-center">Generated by PathFinder AI • {new Date().getFullYear()}</p>
+        </motion.div>
+      )}
+
+      {!loading && markdownFallback && !report && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+          <div className="bg-card border border-border rounded-xl p-6 prose prose-invert prose-sm max-w-none
+            prose-headings:text-foreground prose-headings:font-bold
+            prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2
+            prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
+            prose-p:text-muted-foreground prose-p:my-1.5
+            prose-li:text-muted-foreground prose-li:my-0.5
+            prose-strong:text-foreground
+          ">
+            <ReactMarkdown>{markdownFallback}</ReactMarkdown>
+          </div>
         </motion.div>
       )}
     </div>

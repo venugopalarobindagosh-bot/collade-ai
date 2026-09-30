@@ -1,7 +1,9 @@
 import { useState } from "react";
-import { Zap, ArrowRight, Sparkles, Shield, TrendingUp, Target } from "lucide-react";
+import { Zap, ArrowRight, Sparkles, Shield, Target } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 import { useCredits } from "@/hooks/useCredits";
 import { invokeLLM } from "@/api/llm";
+import { parseAIResponse, extractArray } from "@/lib/aiResponseHandler";
 import SectionHeader from "../components/SectionHeader";
 import CareerCard from "../components/CareerCard";
 import LoadingGrid from "../components/LoadingGrid";
@@ -34,27 +36,26 @@ export default function Recommendations() {
   const [salary, setSalary] = useState("");
   const [dreamLocation, setDreamLocation] = useState("");
   const [results, setResults] = useState(null);
+  const [markdownFallback, setMarkdownFallback] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
   const toggleItem = (item, list, setList) => {
-    if (list.includes(item)) {
-      setList(list.filter((i) => i !== item));
-    } else {
-      setList([...list, item]);
-    }
+    if (list.includes(item)) setList(list.filter((i) => i !== item));
+    else setList([...list, item]);
   };
 
   const getRecommendations = async () => {
     const spent = await deductCredit();
-    if (!spent) { 
-      window.dispatchEvent(new CustomEvent("collade:upgrade")); 
-      return; 
+    if (!spent) {
+      window.dispatchEvent(new CustomEvent("collade:upgrade"));
+      return;
     }
-    
+
     setLoading(true);
     setError(null);
-    
+    setMarkdownFallback("");
+
     try {
       const prompt = `Based on this student profile, give the TOP 10 best career path recommendations:
 
@@ -63,55 +64,46 @@ Skills: ${skills.join(", ")}
 Salary Expectation: ${salary}
 Dream Location: ${dreamLocation || "Flexible / Global"}
 
-For each recommendation, provide:
-1. Why it's a perfect fit for this student
-2. Future-proof potential (rate 1-10)
-3. Risk vs reward assessment
-4. Required skills they need to develop
-5. Best education path to get there
-6. Detailed career and salary info
-
-Be creative — include both mainstream and unconventional paths. Think globally.
-
 Return a JSON object with:
-- recommendations (array of: name, stream, level, duration, short_description, why_it_fits, future_proof_score, risk_reward, salary_range, ai_impact, growth, locations, skills_to_develop, education_path)
-- overall_insight (string)`;
+- recommendations (array of: name, stream, level, duration, short_description, why_it_fits, future_proof_score, risk_reward, salary_range, ai_impact, growth, locations, skills_to_develop (array), education_path)
+- overall_insight (string)
 
-      const response = await invokeLLM({
-        prompt: prompt,
-        query: prompt
-      });
+IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
 
+      const response = await invokeLLM({ prompt, query: prompt });
       console.log('[Recommendations] Raw response:', response);
 
-      let parsedData = null;
-      if (typeof response === 'string') {
-        const jsonMatch = response.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          try {
-            parsedData = JSON.parse(jsonMatch[0]);
-          } catch (e) {
-            console.error('[Recommendations] JSON parse error:', e);
-          }
-        }
-      } else if (typeof response === 'object') {
-        parsedData = response;
+      const parsed = parseAIResponse(response);
+      console.log('[Recommendations] Parsed type:', parsed.type);
+
+      if (parsed.type === 'json' && parsed.data) {
+        const recs = extractArray(parsed.data, ['recommendations', 'careers', 'results']);
+        setResults({
+          recommendations: recs,
+          overall_insight: parsed.data.overall_insight || "",
+        });
+        if (recs.length === 0) setMarkdownFallback(parsed.raw);
+      } else if (parsed.type === 'markdown') {
+        setMarkdownFallback(parsed.raw);
+      } else {
+        setError("No recommendations returned. Please try again.");
       }
-
-      const recData = {
-        recommendations: parsedData?.recommendations || [],
-        overall_insight: parsedData?.overall_insight || "Based on your profile, here are the best career paths for you."
-      };
-
-      console.log('[Recommendations] Parsed:', recData);
-      setResults(recData);
-
     } catch (err) {
       console.error('[Recommendations] Error:', err);
       setError(err.message || 'Failed to get recommendations. Please try again.');
     } finally {
       setLoading(false);
     }
+  };
+
+  const reset = () => {
+    setResults(null);
+    setMarkdownFallback("");
+    setStep(1);
+    setInterests([]);
+    setSkills([]);
+    setSalary("");
+    setDreamLocation("");
   };
 
   return (
@@ -122,16 +114,14 @@ Return a JSON object with:
         icon={Zap}
       />
 
-      {/* Error Message */}
       {error && (
         <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4 text-destructive">
           <p className="text-sm">{error}</p>
         </div>
       )}
 
-      {!loading && !results && (
+      {!loading && !results && !markdownFallback && (
         <div className="bg-card border border-border rounded-xl p-5 space-y-6">
-          {/* Progress */}
           <div className="flex items-center gap-2">
             {[1, 2, 3, 4].map((s) => (
               <div key={s} className="flex items-center gap-2 flex-1">
@@ -140,7 +130,6 @@ Return a JSON object with:
             ))}
           </div>
 
-          {/* Step 1: Interests */}
           {step === 1 && (
             <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
               <div>
@@ -170,7 +159,6 @@ Return a JSON object with:
             </motion.div>
           )}
 
-          {/* Step 2: Skills */}
           {step === 2 && (
             <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
               <div>
@@ -205,7 +193,6 @@ Return a JSON object with:
             </motion.div>
           )}
 
-          {/* Step 3: Salary */}
           {step === 3 && (
             <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
               <div>
@@ -241,7 +228,6 @@ Return a JSON object with:
             </motion.div>
           )}
 
-          {/* Step 4: Location */}
           {step === 4 && (
             <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
               <div>
@@ -284,52 +270,56 @@ Return a JSON object with:
             </div>
           )}
 
-          <button
-            onClick={() => { setResults(null); setStep(1); setInterests([]); setSkills([]); setSalary(""); setDreamLocation(""); }}
-            className="text-sm text-primary font-medium hover:underline"
-          >
-            ← Start over
-          </button>
+          <button onClick={reset} className="text-sm text-primary font-medium hover:underline">← Start over</button>
 
-          <div className="space-y-4">
-            {(results.recommendations || []).map((rec, i) => (
-              <motion.div
-                key={i}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.05 }}
-                className="bg-card border border-border rounded-xl p-5 space-y-3"
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-xs font-bold bg-primary text-primary-foreground px-2 py-0.5 rounded-md">#{i + 1}</span>
-                  {rec.future_proof_score && (
-                    <span className="text-xs font-medium bg-accent/10 text-accent px-2 py-0.5 rounded-md flex items-center gap-1">
-                      <Shield className="h-3 w-3" /> Future-proof: {rec.future_proof_score}
-                    </span>
+          {results.recommendations?.length > 0 && (
+            <div className="space-y-4">
+              {results.recommendations.map((rec, i) => (
+                <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
+                  className="bg-card border border-border rounded-xl p-5 space-y-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xs font-bold bg-primary text-primary-foreground px-2 py-0.5 rounded-md">#{i + 1}</span>
+                    {rec.future_proof_score && (
+                      <span className="text-xs font-medium bg-accent/10 text-accent px-2 py-0.5 rounded-md flex items-center gap-1">
+                        <Shield className="h-3 w-3" /> Future-proof: {rec.future_proof_score}
+                      </span>
+                    )}
+                  </div>
+                  <CareerCard career={rec} index={i} />
+                  {rec.why_it_fits && (
+                    <div className="pl-4 border-l-2 border-primary/30">
+                      <p className="text-xs font-semibold text-primary">Why this fits you:</p>
+                      <p className="text-sm text-muted-foreground mt-0.5">{rec.why_it_fits}</p>
+                    </div>
                   )}
-                </div>
-                <CareerCard career={rec} index={i} />
-                {rec.why_it_fits && (
-                  <div className="pl-4 border-l-2 border-primary/30">
-                    <p className="text-xs font-semibold text-primary">Why this fits you:</p>
-                    <p className="text-sm text-muted-foreground mt-0.5">{rec.why_it_fits}</p>
-                  </div>
-                )}
-                {rec.risk_reward && (
-                  <p className="text-xs text-muted-foreground"><span className="font-semibold">Risk vs Reward:</span> {rec.risk_reward}</p>
-                )}
-                {rec.education_path && (
-                  <p className="text-xs text-muted-foreground"><span className="font-semibold">Education Path:</span> {rec.education_path}</p>
-                )}
-                {rec.skills_to_develop && rec.skills_to_develop.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {rec.skills_to_develop.map((skill, j) => (
-                      <span key={j} className="text-[11px] bg-secondary px-2 py-1 rounded-md">{skill}</span>
-                    ))}
-                  </div>
-                )}
-              </motion.div>
-            ))}
+                  {rec.risk_reward && <p className="text-xs text-muted-foreground"><span className="font-semibold">Risk vs Reward:</span> {rec.risk_reward}</p>}
+                  {rec.education_path && <p className="text-xs text-muted-foreground"><span className="font-semibold">Education Path:</span> {rec.education_path}</p>}
+                  {rec.skills_to_develop?.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {rec.skills_to_develop.map((skill, j) => (
+                        <span key={j} className="text-[11px] bg-secondary px-2 py-1 rounded-md">{skill}</span>
+                      ))}
+                    </div>
+                  )}
+                </motion.div>
+              ))}
+            </div>
+          )}
+        </motion.div>
+      )}
+
+      {!loading && markdownFallback && !results && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
+          <button onClick={reset} className="text-sm text-primary font-medium hover:underline">← Start over</button>
+          <div className="bg-card border border-border rounded-xl p-6 prose prose-invert prose-sm max-w-none
+            prose-headings:text-foreground prose-headings:font-bold
+            prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2
+            prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
+            prose-p:text-muted-foreground prose-p:my-1.5
+            prose-li:text-muted-foreground prose-li:my-0.5
+            prose-strong:text-foreground
+          ">
+            <ReactMarkdown>{markdownFallback}</ReactMarkdown>
           </div>
         </motion.div>
       )}

@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { GraduationCap, Search, ChevronRight } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 import { useCredits } from "@/hooks/useCredits";
 import { invokeLLM } from "@/api/llm";
+import { parseAIResponse, extractArray } from "@/lib/aiResponseHandler";
 import SectionHeader from "../components/SectionHeader";
 import CareerCard from "../components/CareerCard";
 import LoadingGrid from "../components/LoadingGrid";
@@ -20,21 +22,23 @@ export default function ExploreDegrees() {
   const [selectedLevel, setSelectedLevel] = useState(null);
   const [selectedStream, setSelectedStream] = useState(null);
   const [results, setResults] = useState([]);
+  const [markdownFallback, setMarkdownFallback] = useState("");
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [error, setError] = useState(null);
 
   const fetchDegrees = async (level, stream) => {
     const spent = await deductCredit();
-    if (!spent) { 
-      window.dispatchEvent(new CustomEvent("collade:upgrade")); 
-      return; 
+    if (!spent) {
+      window.dispatchEvent(new CustomEvent("collade:upgrade"));
+      return;
     }
-    
+
     setLoading(true);
     setResults([]);
+    setMarkdownFallback("");
     setError(null);
-    
+
     try {
       const prompt = `You are a comprehensive career guidance database. List 12 diverse degrees/programs at the ${level} level in the ${stream} stream.
 
@@ -52,96 +56,62 @@ Return a JSON object with a "degrees" array. Each degree should have:
 - growth (string)
 - locations (array of strings)
 - required_subjects (array of strings)
-- entrance_exams (array of strings)`;
+- entrance_exams (array of strings)
 
-      const response = await invokeLLM({ 
-        prompt: prompt,
-        query: prompt
-      });
+IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
 
+      const response = await invokeLLM({ prompt, query: prompt });
       console.log('[ExploreDegrees] Raw response:', response);
 
-      // Parse the response
-      let parsedData = null;
-      let degrees = [];
-      
-      if (typeof response === 'string') {
-        const jsonMatch = response.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          try {
-            parsedData = JSON.parse(jsonMatch[0]);
-          } catch (e) {
-            console.error('[ExploreDegrees] JSON parse error:', e);
-          }
-        }
-      } else if (typeof response === 'object') {
-        parsedData = response;
-      }
+      const parsed = parseAIResponse(response);
+      console.log('[ExploreDegrees] Parsed type:', parsed.type);
 
-      if (parsedData?.degrees) {
-        degrees = parsedData.degrees;
-      } else if (Array.isArray(parsedData)) {
-        degrees = parsedData;
+      if (parsed.type === 'json') {
+        const degrees = extractArray(parsed.data, ['degrees', 'programs', 'results']);
+        console.log('[ExploreDegrees] Extracted degrees:', degrees.length);
+        setResults(degrees);
+        if (degrees.length === 0) setMarkdownFallback(parsed.raw);
+      } else if (parsed.type === 'markdown') {
+        setMarkdownFallback(parsed.raw);
       } else {
-        // Fallback: create a simple result
-        degrees = [{
-          name: `${stream} Programs at ${level} Level`,
-          stream: stream,
-          specialization: "Various",
-          level: level,
-          duration: "Varies",
-          short_description: typeof response === 'string' ? response.substring(0, 200) + "..." : "Explore programs in this field",
-          salary_range: "Varies",
-          ai_impact: "Medium",
-          growth: "Varies",
-          locations: ["Global"],
-          required_subjects: ["Varies"],
-          entrance_exams: ["Varies"]
-        }];
+        setError('No results returned. Please try again.');
       }
-
-      console.log('[ExploreDegrees] Parsed degrees:', degrees);
-      setResults(degrees);
-
     } catch (error) {
       console.error('[ExploreDegrees] Error:', error);
       setError(error.message || 'Failed to find degrees. Please try again.');
-    } finally { 
-      setLoading(false); 
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleStreamClick = (stream) => {
     setSelectedStream(stream);
     setError(null);
-    if (selectedLevel) {
-      fetchDegrees(selectedLevel, stream);
-    }
+    if (selectedLevel) fetchDegrees(selectedLevel, stream);
   };
 
   const handleLevelClick = (level) => {
     setSelectedLevel(level);
     setError(null);
-    if (selectedStream) {
-      fetchDegrees(level, selectedStream);
-    }
+    if (selectedStream) fetchDegrees(level, selectedStream);
   };
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
-    
+
     const spent = await deductCredit();
-    if (!spent) { 
-      window.dispatchEvent(new CustomEvent("collade:upgrade")); 
-      return; 
+    if (!spent) {
+      window.dispatchEvent(new CustomEvent("collade:upgrade"));
+      return;
     }
-    
+
     setLoading(true);
     setResults([]);
+    setMarkdownFallback("");
     setError(null);
     setSelectedLevel(null);
     setSelectedStream(null);
-    
+
     try {
       const prompt = `Search for degrees, courses, and programs related to: "${searchQuery}". Return 10 diverse results across all levels and streams globally.
 
@@ -155,57 +125,30 @@ Return a JSON object with a "degrees" array. Each degree should have:
 - salary_range (string)
 - ai_impact (string: "High", "Medium", or "Low")
 - growth (string)
-- locations (array of strings)`;
+- locations (array of strings)
 
-      const response = await invokeLLM({ 
-        prompt: prompt,
-        query: prompt
-      });
+IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
 
+      const response = await invokeLLM({ prompt, query: prompt });
       console.log('[ExploreDegrees] Search response:', response);
 
-      let parsedData = null;
-      let degrees = [];
-      
-      if (typeof response === 'string') {
-        const jsonMatch = response.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          try {
-            parsedData = JSON.parse(jsonMatch[0]);
-          } catch (e) {
-            console.error('[ExploreDegrees] JSON parse error:', e);
-          }
-        }
-      } else if (typeof response === 'object') {
-        parsedData = response;
-      }
+      const parsed = parseAIResponse(response);
+      console.log('[ExploreDegrees] Parsed type:', parsed.type);
 
-      if (parsedData?.degrees) {
-        degrees = parsedData.degrees;
-      } else if (Array.isArray(parsedData)) {
-        degrees = parsedData;
+      if (parsed.type === 'json') {
+        const degrees = extractArray(parsed.data, ['degrees', 'programs', 'results']);
+        setResults(degrees);
+        if (degrees.length === 0) setMarkdownFallback(parsed.raw);
+      } else if (parsed.type === 'markdown') {
+        setMarkdownFallback(parsed.raw);
       } else {
-        degrees = [{
-          name: `Results for "${searchQuery}"`,
-          stream: "Various",
-          specialization: "Various",
-          level: "Various",
-          duration: "Varies",
-          short_description: typeof response === 'string' ? response.substring(0, 200) + "..." : "Search results",
-          salary_range: "Varies",
-          ai_impact: "Medium",
-          growth: "Varies",
-          locations: ["Global"]
-        }];
+        setError('No results returned. Please try again.');
       }
-
-      setResults(degrees);
-
     } catch (error) {
       console.error('[ExploreDegrees] Search error:', error);
       setError(error.message || 'Failed to search degrees. Please try again.');
-    } finally { 
-      setLoading(false); 
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -217,7 +160,6 @@ Return a JSON object with a "degrees" array. Each degree should have:
         icon={GraduationCap}
       />
 
-      {/* Search */}
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <input
@@ -229,7 +171,6 @@ Return a JSON object with a "degrees" array. Each degree should have:
         />
       </div>
 
-      {/* Level selector */}
       <div>
         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Step 1 — Choose Level</p>
         <div className="flex flex-wrap gap-2">
@@ -249,7 +190,6 @@ Return a JSON object with a "degrees" array. Each degree should have:
         </div>
       </div>
 
-      {/* Stream selector */}
       <div>
         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Step 2 — Choose Stream</p>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
@@ -270,22 +210,16 @@ Return a JSON object with a "degrees" array. Each degree should have:
         </div>
       </div>
 
-      {/* Error Message */}
       {error && (
         <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4 text-destructive">
           <p className="text-sm">{error}</p>
         </div>
       )}
 
-      {/* Results */}
       {loading && <LoadingGrid text="Finding degrees and programs..." />}
 
       {!loading && results.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="space-y-3"
-        >
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
           <p className="text-sm text-muted-foreground">
             {results.length} programs found
             {selectedLevel && selectedStream ? ` for ${selectedLevel} in ${selectedStream}` : ""}
@@ -298,8 +232,22 @@ Return a JSON object with a "degrees" array. Each degree should have:
         </motion.div>
       )}
 
-      {!loading && results.length === 0 && (selectedLevel || selectedStream) && !selectedLevel && (
-        <p className="text-center text-sm text-muted-foreground py-10">Select both a level and stream to see programs</p>
+      {!loading && markdownFallback && results.length === 0 && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Programs found{selectedLevel && selectedStream ? ` for ${selectedLevel} in ${selectedStream}` : ""}:
+          </p>
+          <div className="bg-card border border-border rounded-xl p-6 prose prose-invert prose-sm max-w-none
+            prose-headings:text-foreground prose-headings:font-bold
+            prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2
+            prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
+            prose-p:text-muted-foreground prose-p:my-1.5
+            prose-li:text-muted-foreground prose-li:my-0.5
+            prose-strong:text-foreground
+          ">
+            <ReactMarkdown>{markdownFallback}</ReactMarkdown>
+          </div>
+        </motion.div>
       )}
     </div>
   );

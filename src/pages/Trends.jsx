@@ -1,8 +1,10 @@
 import { useState, useRef } from "react";
 import { invokeLLM } from "@/api/llm";
 import { useCredits } from "@/hooks/useCredits";
+import { parseAIResponse, extractArray } from "@/lib/aiResponseHandler";
 import { TrendingUp, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import ReactMarkdown from "react-markdown";
 import { motion } from "framer-motion";
 import SectionHeader from "@/components/SectionHeader";
 import LoadingGrid from "@/components/LoadingGrid";
@@ -12,6 +14,7 @@ const STREAMS = ["Technology", "Healthcare", "Business", "Arts & Design", "Scien
 export default function Trends() {
   const [selectedStream, setSelectedStream] = useState("Technology");
   const [trends, setTrends] = useState(null);
+  const [markdownFallback, setMarkdownFallback] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const { deductCredit } = useCredits();
@@ -19,17 +22,18 @@ export default function Trends() {
 
   const fetchTrends = async (stream) => {
     const ok = await deductCredit();
-    if (!ok) { 
-      window.dispatchEvent(new CustomEvent("collade:upgrade")); 
-      return; 
+    if (!ok) {
+      window.dispatchEvent(new CustomEvent("collade:upgrade"));
+      return;
     }
-    
+
     setLoading(true);
     setTrends(null);
+    setMarkdownFallback("");
     setError(null);
-    
+
     try {
-      const prompt = `You are a career trends expert. Provide the top 8 emerging career trends in "${stream}" for 2024-2030. 
+      const prompt = `You are a career trends expert. Provide the top 8 emerging career trends in "${stream}" for 2024-2030.
 
 For each trend include:
 - title (string)
@@ -42,55 +46,29 @@ For each trend include:
 Return a JSON object with:
 - stream (string)
 - summary (string)
-- trends (array of the above objects)`;
+- trends (array of the above objects)
 
-      const response = await invokeLLM({ 
-        prompt: prompt,
-        query: prompt
-      });
+IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
 
+      const response = await invokeLLM({ prompt, query: prompt });
       console.log('[Trends] Raw response:', response);
 
-      // Parse the response
-      let parsedData = null;
-      
-      if (typeof response === 'string') {
-        const jsonMatch = response.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          try {
-            parsedData = JSON.parse(jsonMatch[0]);
-          } catch (e) {
-            console.error('[Trends] JSON parse error:', e);
-          }
-        }
-      } else if (typeof response === 'object') {
-        parsedData = response;
+      const parsed = parseAIResponse(response);
+      console.log('[Trends] Parsed type:', parsed.type);
+
+      if (parsed.type === 'json' && parsed.data) {
+        const trendsArray = extractArray(parsed.data, ['trends', 'results', 'items']);
+        setTrends({
+          stream: parsed.data.stream || stream,
+          summary: parsed.data.summary || "",
+          trends: trendsArray,
+        });
+        if (trendsArray.length === 0) setMarkdownFallback(parsed.raw);
+      } else if (parsed.type === 'markdown') {
+        setMarkdownFallback(parsed.raw);
+      } else {
+        setError('No trends returned. Please try again.');
       }
-
-      // Build trends object
-      let trendsData = {
-        stream: stream,
-        summary: parsedData?.summary || `Top emerging trends in ${stream}`,
-        trends: parsedData?.trends || []
-      };
-
-      // If no trends, create fallback
-      if (trendsData.trends.length === 0 && typeof response === 'string') {
-        // Try to extract trends from text response
-        const lines = response.split('\n').filter(line => line.trim());
-        trendsData.trends = lines.slice(0, 8).map((line, i) => ({
-          title: `Trend ${i + 1}`,
-          description: line.substring(0, 150),
-          growth_rate: "Varies",
-          demand: "Medium",
-          key_skills: ["Adaptability", "Learning", "Problem Solving"],
-          ai_impact: "Growing"
-        }));
-      }
-
-      console.log('[Trends] Parsed trends:', trendsData);
-      setTrends(trendsData);
-
     } catch (error) {
       console.error('[Trends] Error:', error);
       setError(error.message || 'Failed to fetch trends. Please try again.');
@@ -115,7 +93,6 @@ Return a JSON object with:
         icon={TrendingUp}
       />
 
-      {/* Stream selector */}
       <div className="flex flex-wrap gap-2 mb-6">
         {STREAMS.map((s) => (
           <button
@@ -132,7 +109,6 @@ Return a JSON object with:
         ))}
       </div>
 
-      {/* Refresh button */}
       {trends && !loading && (
         <div className="flex justify-end mb-4">
           <Button variant="outline" size="sm" onClick={() => fetchTrends(selectedStream)}>
@@ -143,14 +119,13 @@ Return a JSON object with:
 
       {loading && <LoadingGrid text="Analyzing career trends..." />}
 
-      {/* Error Message */}
       {error && (
         <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4 text-destructive">
           <p className="text-sm">{error}</p>
         </div>
       )}
 
-      {!loading && !trends && !error && (
+      {!loading && !trends && !markdownFallback && !error && (
         <div className="flex flex-col items-center justify-center py-20 text-center">
           <div className="h-16 w-16 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
             <TrendingUp className="h-7 w-7 text-primary" />
@@ -159,7 +134,7 @@ Return a JSON object with:
         </div>
       )}
 
-      {!loading && trends?.trends && (
+      {!loading && trends?.trends && trends.trends.length > 0 && (
         <>
           {trends.summary && (
             <p className="text-sm text-muted-foreground mb-5 bg-secondary/50 rounded-xl px-4 py-3">{trends.summary}</p>
@@ -201,6 +176,21 @@ Return a JSON object with:
             ))}
           </div>
         </>
+      )}
+
+      {!loading && markdownFallback && !trends && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+          <div className="bg-card border border-border rounded-xl p-6 prose prose-invert prose-sm max-w-none
+            prose-headings:text-foreground prose-headings:font-bold
+            prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2
+            prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
+            prose-p:text-muted-foreground prose-p:my-1.5
+            prose-li:text-muted-foreground prose-li:my-0.5
+            prose-strong:text-foreground
+          ">
+            <ReactMarkdown>{markdownFallback}</ReactMarkdown>
+          </div>
+        </motion.div>
       )}
     </div>
   );

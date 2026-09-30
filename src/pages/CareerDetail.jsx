@@ -1,11 +1,11 @@
 import { useState, useEffect } from "react";
-import { ArrowLeft, Clock, MapPin, DollarSign, Zap, TrendingUp, BookOpen, GraduationCap, Users, Brain, Briefcase, Globe, Star } from "lucide-react";
+import { ArrowLeft, Clock, DollarSign, Zap, TrendingUp, BookOpen, GraduationCap, Users, Brain, Briefcase, Globe, Star } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 import { invokeLLM } from "@/api/llm";
-import { Link } from "react-router-dom";
+import { parseAIResponse } from "@/lib/aiResponseHandler";
 import LoadingGrid from "../components/LoadingGrid";
 import { motion } from "framer-motion";
 
-// ✅ FIX: Safe string converter
 function safeString(value) {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value;
@@ -25,6 +25,7 @@ export default function CareerDetail() {
   const level = urlParams.get("level") || "";
 
   const [detail, setDetail] = useState(null);
+  const [markdownFallback, setMarkdownFallback] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -38,101 +39,85 @@ export default function CareerDetail() {
 ${stream ? `Stream: ${stream}` : ""}
 ${level ? `Level: ${level}` : ""}
 
-You MUST return a structured JSON object with these EXACT fields. Each field MUST have specific, real data — never "varies" unless absolutely unavoidable:
+You MUST return a structured JSON object with these EXACT fields. Each field MUST have specific, real data:
 
-- name: Full career name
-- full_title: Full title with specialization if any
-- stream: Primary field (e.g., Engineering, Medicine, Arts)
-- specialization: Any specific focus area
-- level: Education level (e.g., Undergraduate, Postgraduate)
-- duration: Specific years (e.g., "4 years", "2 years + internship")
-- overview: 3-4 sentences describing the career in detail
-- what_you_will_learn: Array of 5-8 specific skills/subjects
-- required_subjects: Array of 4-6 high school subjects needed
-- entrance_exams: Array of 2-4 specific exams (e.g., "JEE Main", "NEET")
-- top_universities_india: Array of 3-5 specific Indian universities
-- top_universities_global: Array of 3-5 specific global universities
-- career_options: Array of 4-6 specific job titles
-- salary_india: Specific range (e.g., "₹6-12 LPA")
-- salary_global: Specific range (e.g., "$70,000-$110,000 USD")
-- salary_entry: Specific number (e.g., "₹5-8 LPA")
-- salary_mid: Specific number (e.g., "₹12-20 LPA")
-- salary_senior: Specific number (e.g., "₹25-40 LPA")
-- ai_impact: Percentage (e.g., "15%")
-- ai_impact_detail: 2-3 sentences explaining AI impact
-- growth_potential: "High", "Medium", or "Low"
-- growth_detail: 1-2 sentences explaining growth
-- personality_fit: 1-2 sentences on who fits this career
-- stress_level: "Low", "Medium", or "High"
-- work_life_balance: "Good", "Moderate", or "Challenging"
-- skills_needed: Array of 5-8 specific skills
-- future_proof_skills: Array of 3-5 skills to future-proof
-- popular_locations: Array of 3-5 specific cities/countries
-- emerging_specializations: Array of 2-4 emerging areas
-- related_certifications: Array of 2-4 specific certifications
-- internship_opportunities: 1-2 sentences on internships
-- online_resources: Array of 3-5 specific websites/courses
-- day_in_the_life: 3-4 sentences describing a typical day
-- pros: Array of 4-6 specific advantages
-- cons: Array of 4-6 specific disadvantages
-- quick_summary: 1-2 sentences summarizing the career
+- name, full_title, stream, specialization, level, duration
+- overview: 3-4 sentences describing the career
+- what_you_will_learn (array)
+- required_subjects (array)
+- entrance_exams (array)
+- top_universities_india (array)
+- top_universities_global (array)
+- career_options (array)
+- salary_india, salary_global, salary_entry, salary_mid, salary_senior
+- ai_impact (percentage), ai_impact_detail (2-3 sentences)
+- growth_potential, growth_detail
+- personality_fit, stress_level, work_life_balance
+- skills_needed (array), future_proof_skills (array)
+- popular_locations (array), emerging_specializations (array)
+- related_certifications (array)
+- internship_opportunities (1-2 sentences)
+- online_resources (array)
+- day_in_the_life (3-4 sentences)
+- pros (array), cons (array)
+- quick_summary (1-2 sentences)
 
-RULES: NEVER say "varies". NEVER say "Detailed information about this career path". ALWAYS use real numbers and specific names. If you don't know something, say "Data is uncertain, but typically ranges from X to Y".`;
+RULES: NEVER say "varies". ALWAYS use real numbers and specific names.
+
+IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
 
         const response = await invokeLLM({ prompt: prompt, query: prompt });
         console.log('[CareerDetail] Raw response:', response);
 
-        let parsedData = null;
-        if (typeof response === 'string') {
-          const jsonMatch = response.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            try { parsedData = JSON.parse(jsonMatch[0]); } catch (e) { console.error('[CareerDetail] JSON parse error:', e); }
-          }
-        } else if (typeof response === 'object') {
-          parsedData = response;
+        const parsed = parseAIResponse(response);
+        console.log('[CareerDetail] Parsed type:', parsed.type);
+
+        if (parsed.type === 'json' && parsed.data) {
+          const d = parsed.data;
+          const detailData = {
+            name: d.name || name,
+            full_title: d.full_title || name,
+            stream: d.stream || stream || "Various",
+            specialization: d.specialization || "",
+            level: d.level || level || "Varies",
+            duration: d.duration || "4 years",
+            overview: d.overview || "",
+            what_you_will_learn: d.what_you_will_learn || [],
+            required_subjects: d.required_subjects || [],
+            entrance_exams: d.entrance_exams || [],
+            top_universities_india: d.top_universities_india || [],
+            top_universities_global: d.top_universities_global || [],
+            career_options: d.career_options || [],
+            salary_india: d.salary_india || "",
+            salary_global: d.salary_global || "",
+            salary_entry: d.salary_entry || "",
+            salary_mid: d.salary_mid || "",
+            salary_senior: d.salary_senior || "",
+            ai_impact: d.ai_impact || "",
+            ai_impact_detail: d.ai_impact_detail || "",
+            growth_potential: d.growth_potential || "",
+            growth_detail: d.growth_detail || "",
+            personality_fit: d.personality_fit || "",
+            stress_level: d.stress_level || "",
+            work_life_balance: d.work_life_balance || "",
+            skills_needed: d.skills_needed || [],
+            future_proof_skills: d.future_proof_skills || [],
+            popular_locations: d.popular_locations || [],
+            emerging_specializations: d.emerging_specializations || [],
+            related_certifications: d.related_certifications || [],
+            internship_opportunities: d.internship_opportunities || "",
+            online_resources: d.online_resources || [],
+            day_in_the_life: d.day_in_the_life || "",
+            pros: d.pros || [],
+            cons: d.cons || [],
+            quick_summary: d.quick_summary || "",
+          };
+          setDetail(detailData);
+        } else if (parsed.type === 'markdown') {
+          setMarkdownFallback(parsed.raw);
+        } else {
+          setError('No career details found. Please try again.');
         }
-
-        const detailData = {
-          name: parsedData?.name || name,
-          full_title: parsedData?.full_title || name,
-          stream: parsedData?.stream || stream || "Various",
-          specialization: parsedData?.specialization || "",
-          level: parsedData?.level || level || "Varies",
-          duration: parsedData?.duration || "4 years",
-          overview: parsedData?.overview || "Detailed information about this career path.",
-          what_you_will_learn: parsedData?.what_you_will_learn || [],
-          required_subjects: parsedData?.required_subjects || [],
-          entrance_exams: parsedData?.entrance_exams || [],
-          top_universities_india: parsedData?.top_universities_india || [],
-          top_universities_global: parsedData?.top_universities_global || [],
-          career_options: parsedData?.career_options || [],
-          salary_india: parsedData?.salary_india || "₹6-12 LPA",
-          salary_global: parsedData?.salary_global || "$70,000-$110,000 USD",
-          salary_entry: parsedData?.salary_entry || "₹5-8 LPA",
-          salary_mid: parsedData?.salary_mid || "₹12-20 LPA",
-          salary_senior: parsedData?.salary_senior || "₹25-40 LPA",
-          ai_impact: parsedData?.ai_impact || "25%",
-          ai_impact_detail: parsedData?.ai_impact_detail || "AI is increasingly used in this field for automation, analytics, and optimization. Human oversight remains critical.",
-          growth_potential: parsedData?.growth_potential || "High",
-          growth_detail: parsedData?.growth_detail || "Growing demand for skilled professionals in this field.",
-          personality_fit: parsedData?.personality_fit || "Analytical, detail-oriented, and communicative individuals",
-          stress_level: parsedData?.stress_level || "Medium",
-          work_life_balance: parsedData?.work_life_balance || "Moderate",
-          skills_needed: parsedData?.skills_needed || [],
-          future_proof_skills: parsedData?.future_proof_skills || [],
-          popular_locations: parsedData?.popular_locations || [],
-          emerging_specializations: parsedData?.emerging_specializations || [],
-          related_certifications: parsedData?.related_certifications || [],
-          internship_opportunities: parsedData?.internship_opportunities || "Look for internships at top companies and research labs.",
-          online_resources: parsedData?.online_resources || [],
-          day_in_the_life: parsedData?.day_in_the_life || "A typical day involves working on projects, collaborating with colleagues, and solving problems.",
-          pros: parsedData?.pros || ["Good career prospects", "High earning potential", "Work-life balance", "Opportunities for growth"],
-          cons: parsedData?.cons || ["May require ongoing learning", "Can be stressful", "Competitive field", "Long hours sometimes required"],
-          quick_summary: parsedData?.quick_summary || "A solid career path with good opportunities and growth potential."
-        };
-
-        console.log('[CareerDetail] Parsed:', detailData);
-        setDetail(detailData);
       } catch (err) {
         console.error('[CareerDetail] Error:', err);
         setError(err.message || 'Failed to load career details.');
@@ -145,6 +130,31 @@ RULES: NEVER say "varies". NEVER say "Detailed information about this career pat
 
   if (loading) return <LoadingGrid text={`Loading details for ${name}...`} />;
   if (error) return <p className="text-center py-20 text-destructive">{error}</p>;
+
+  // Markdown fallback
+  if (markdownFallback && !detail) {
+    return (
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+        <button onClick={() => window.history.back()} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
+          <ArrowLeft className="h-4 w-4" /> Back
+        </button>
+        <div className="bg-gradient-to-br from-primary/10 via-accent/5 to-background border border-primary/10 rounded-2xl p-6">
+          <h1 className="font-heading text-2xl sm:text-3xl font-bold">{name}</h1>
+        </div>
+        <div className="bg-card border border-border rounded-xl p-6 prose prose-invert prose-sm max-w-none
+          prose-headings:text-foreground prose-headings:font-bold
+          prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2
+          prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
+          prose-p:text-muted-foreground prose-p:my-1.5
+          prose-li:text-muted-foreground prose-li:my-0.5
+          prose-strong:text-foreground
+        ">
+          <ReactMarkdown>{markdownFallback}</ReactMarkdown>
+        </div>
+      </motion.div>
+    );
+  }
+
   if (!detail) return <p className="text-center py-20 text-muted-foreground">Career not found</p>;
 
   const InfoRow = ({ icon: Icon, label, value }) => {
@@ -225,14 +235,16 @@ RULES: NEVER say "varies". NEVER say "Detailed information about this career pat
           <TagSection title="What You'll Learn" items={detail.what_you_will_learn} color="bg-primary/10 text-primary" />
           <TagSection title="Career Options" items={detail.career_options} color="bg-accent/10 text-accent" />
 
-          <div className="bg-card border border-border rounded-xl p-5 space-y-3">
-            <h3 className="font-heading font-bold flex items-center gap-2"><DollarSign className="h-4 w-4 text-primary" /> Salary Guide</h3>
-            <InfoRow icon={DollarSign} label="India" value={detail.salary_india} />
-            <InfoRow icon={Globe} label="Global" value={detail.salary_global} />
-            <InfoRow icon={Briefcase} label="Entry Level" value={detail.salary_entry} />
-            <InfoRow icon={TrendingUp} label="Mid Level" value={detail.salary_mid} />
-            <InfoRow icon={Star} label="Senior Level" value={detail.salary_senior} />
-          </div>
+          {(detail.salary_india || detail.salary_global || detail.salary_entry || detail.salary_mid || detail.salary_senior) && (
+            <div className="bg-card border border-border rounded-xl p-5 space-y-3">
+              <h3 className="font-heading font-bold flex items-center gap-2"><DollarSign className="h-4 w-4 text-primary" /> Salary Guide</h3>
+              <InfoRow icon={DollarSign} label="India" value={detail.salary_india} />
+              <InfoRow icon={Globe} label="Global" value={detail.salary_global} />
+              <InfoRow icon={Briefcase} label="Entry Level" value={detail.salary_entry} />
+              <InfoRow icon={TrendingUp} label="Mid Level" value={detail.salary_mid} />
+              <InfoRow icon={Star} label="Senior Level" value={detail.salary_senior} />
+            </div>
+          )}
 
           {detail.ai_impact_detail && (
             <div className="bg-card border border-border rounded-xl p-5">
@@ -242,7 +254,7 @@ RULES: NEVER say "varies". NEVER say "Detailed information about this career pat
           )}
 
           <div className="grid sm:grid-cols-2 gap-4">
-            {detail.pros && detail.pros.length > 0 && (
+            {detail.pros?.length > 0 && (
               <div className="bg-card border border-border rounded-xl p-5">
                 <h3 className="font-heading font-bold text-green-600 text-sm mb-2">✅ Pros</h3>
                 <ul className="space-y-1.5">
@@ -250,7 +262,7 @@ RULES: NEVER say "varies". NEVER say "Detailed information about this career pat
                 </ul>
               </div>
             )}
-            {detail.cons && detail.cons.length > 0 && (
+            {detail.cons?.length > 0 && (
               <div className="bg-card border border-border rounded-xl p-5">
                 <h3 className="font-heading font-bold text-red-500 text-sm mb-2">⚠️ Cons</h3>
                 <ul className="space-y-1.5">
@@ -277,7 +289,7 @@ RULES: NEVER say "varies". NEVER say "Detailed information about this career pat
           <TagSection title="Related Certifications" items={detail.related_certifications} />
           <TagSection title="Popular Locations" items={detail.popular_locations} />
 
-          {detail.top_universities_india && detail.top_universities_india.length > 0 && (
+          {detail.top_universities_india?.length > 0 && (
             <div className="bg-card border border-border rounded-xl p-5">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Top Universities (India)</p>
               <ul className="space-y-1">
@@ -288,7 +300,7 @@ RULES: NEVER say "varies". NEVER say "Detailed information about this career pat
             </div>
           )}
 
-          {detail.top_universities_global && detail.top_universities_global.length > 0 && (
+          {detail.top_universities_global?.length > 0 && (
             <div className="bg-card border border-border rounded-xl p-5">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Top Universities (Global)</p>
               <ul className="space-y-1">
@@ -299,7 +311,7 @@ RULES: NEVER say "varies". NEVER say "Detailed information about this career pat
             </div>
           )}
 
-          {detail.online_resources && detail.online_resources.length > 0 && (
+          {detail.online_resources?.length > 0 && (
             <div className="bg-card border border-border rounded-xl p-5">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Online Resources</p>
               <ul className="space-y-1">

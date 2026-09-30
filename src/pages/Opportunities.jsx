@@ -1,8 +1,10 @@
 import { useState } from "react";
-import { Briefcase, Search, MapPin, Clock, Star, Loader2 } from "lucide-react";
+import { Briefcase, Search, MapPin, Clock, Loader2 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 import { useCredits } from "@/hooks/useCredits";
 import FeatureGate from "../components/FeatureGate";
 import { invokeLLM } from "@/api/llm";
+import { parseAIResponse, extractArray } from "@/lib/aiResponseHandler";
 import SectionHeader from "../components/SectionHeader";
 import LoadingGrid from "../components/LoadingGrid";
 import { motion } from "framer-motion";
@@ -19,6 +21,7 @@ export default function Opportunities() {
   const [selected, setSelected] = useState([]);
   const [typeFilter, setTypeFilter] = useState("All");
   const [results, setResults] = useState(null);
+  const [markdownFallback, setMarkdownFallback] = useState("");
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [error, setError] = useState(null);
@@ -28,22 +31,22 @@ export default function Opportunities() {
   const fetchOpportunities = async () => {
     const query = search.trim() || selected.join(", ");
     if (!query) return;
-    
+
     const spent = await deductCredit();
-    if (!spent) { 
-      window.dispatchEvent(new CustomEvent("collade:upgrade")); 
-      return; 
+    if (!spent) {
+      window.dispatchEvent(new CustomEvent("collade:upgrade"));
+      return;
     }
-    
+
     setLoading(true);
     setResults(null);
+    setMarkdownFallback("");
     setError(null);
-    
+
     try {
       const prompt = `Find 10 real-world opportunities for a high school or college student interested in: ${query}.
 Type filter: ${typeFilter === "All" ? "any type" : typeFilter}.
 Include internships, hackathons, competitions, projects, volunteer programs globally.
-Be specific, actionable, and inspiring.
 
 Return a JSON object with an "opportunities" array. Each opportunity should have:
 - opportunity_name (string)
@@ -56,38 +59,31 @@ Return a JSON object with an "opportunities" array. Each opportunity should have
 - description (string)
 - how_to_apply (string)
 - is_free (boolean)
-- stipend (string)`;
+- stipend (string)
 
-      const response = await invokeLLM({ 
-        prompt: prompt,
-        query: prompt
-      });
+IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
 
+      const response = await invokeLLM({ prompt, query: prompt });
       console.log('[Opportunities] Raw response:', response);
 
-      let parsedData = null;
-      if (typeof response === 'string') {
-        const jsonMatch = response.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          try {
-            parsedData = JSON.parse(jsonMatch[0]);
-          } catch (e) {
-            console.error('[Opportunities] JSON parse error:', e);
-          }
-        }
-      } else if (typeof response === 'object') {
-        parsedData = response;
+      const parsed = parseAIResponse(response);
+      console.log('[Opportunities] Parsed type:', parsed.type);
+
+      if (parsed.type === 'json') {
+        const opportunities = extractArray(parsed.data, ['opportunities', 'results', 'items']);
+        console.log('[Opportunities] Extracted:', opportunities.length);
+        setResults(opportunities);
+        if (opportunities.length === 0) setMarkdownFallback(parsed.raw);
+      } else if (parsed.type === 'markdown') {
+        setMarkdownFallback(parsed.raw);
+      } else {
+        setError("No opportunities returned. Please try again.");
       }
-
-      const opportunities = parsedData?.opportunities || [];
-      console.log('[Opportunities] Parsed:', opportunities);
-      setResults(opportunities);
-
     } catch (error) {
       console.error('[Opportunities] Error:', error);
       setError(error.message || 'Failed to find opportunities. Please try again.');
-    } finally { 
-      setLoading(false); 
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -104,7 +100,6 @@ Return a JSON object with an "opportunities" array. Each opportunity should have
     <div className="space-y-6">
       <SectionHeader title="Opportunities Explorer" subtitle="Find internships, hackathons, projects, and competitions worldwide" icon={Briefcase} />
 
-      {/* Search */}
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <input value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => e.key === "Enter" && fetchOpportunities()}
@@ -112,7 +107,6 @@ Return a JSON object with an "opportunities" array. Each opportunity should have
           className="w-full bg-card border border-border rounded-xl pl-10 pr-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
       </div>
 
-      {/* Interest tags */}
       <div>
         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Pick Interests</p>
         <div className="flex flex-wrap gap-2">
@@ -125,7 +119,6 @@ Return a JSON object with an "opportunities" array. Each opportunity should have
         </div>
       </div>
 
-      {/* Type filter */}
       <div className="flex flex-wrap gap-2">
         {TYPE_FILTERS.map(t => (
           <button key={t} onClick={() => setTypeFilter(t)}
@@ -135,13 +128,12 @@ Return a JSON object with an "opportunities" array. Each opportunity should have
         ))}
       </div>
 
-      <button onClick={fetchOpportunities} disabled={selected.length === 0 && !search.trim() || loading}
+      <button onClick={fetchOpportunities} disabled={(selected.length === 0 && !search.trim()) || loading}
         className="w-full bg-primary text-primary-foreground py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-40 shadow-lg shadow-primary/20">
         {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Briefcase className="h-4 w-4" />}
         Find Opportunities
       </button>
 
-      {/* Error Message */}
       {error && (
         <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4 text-destructive">
           <p className="text-sm">{error}</p>
@@ -180,7 +172,7 @@ Return a JSON object with an "opportunities" array. Each opportunity should have
                 {opp.location && <span className="flex items-center gap-1 bg-secondary px-2.5 py-1 rounded-md"><MapPin className="h-3 w-3" />{opp.location}</span>}
                 {opp.stipend && <span className="flex items-center gap-1 bg-accent/10 text-accent px-2.5 py-1 rounded-md">{opp.stipend}</span>}
               </div>
-              {opp.required_skills && opp.required_skills.length > 0 && (
+              {opp.required_skills?.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
                   {opp.required_skills.map((s, j) => <span key={j} className="text-[11px] bg-primary/10 text-primary px-2 py-0.5 rounded-md">{s}</span>)}
                 </div>
@@ -190,6 +182,21 @@ Return a JSON object with an "opportunities" array. Each opportunity should have
               )}
             </motion.div>
           ))}
+        </motion.div>
+      )}
+
+      {!loading && markdownFallback && !results && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+          <div className="bg-card border border-border rounded-xl p-6 prose prose-invert prose-sm max-w-none
+            prose-headings:text-foreground prose-headings:font-bold
+            prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2
+            prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
+            prose-p:text-muted-foreground prose-p:my-1.5
+            prose-li:text-muted-foreground prose-li:my-0.5
+            prose-strong:text-foreground
+          ">
+            <ReactMarkdown>{markdownFallback}</ReactMarkdown>
+          </div>
         </motion.div>
       )}
     </div>

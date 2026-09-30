@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
-import { Brain, Plus, CheckCircle2, Loader2, Star, Zap, Lock, X } from "lucide-react";
+import { Brain, Plus, CheckCircle2, Loader2, Star, X } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 import { useCredits } from "@/hooks/useCredits";
 import FeatureGate from "../components/FeatureGate";
 import { getCurrentUser } from "@/lib/auth";
 import { entities } from "@/api/entities";
 import { invokeLLM } from "@/api/llm";
+import { parseAIResponse, extractArray } from "@/lib/aiResponseHandler";
 import SectionHeader from "../components/SectionHeader";
 import LoadingGrid from "../components/LoadingGrid";
 import { motion, AnimatePresence } from "framer-motion";
@@ -34,6 +36,7 @@ export default function SkillTracker() {
   const [input, setInput] = useState("");
   const [loadingIdx, setLoadingIdx] = useState(null);
   const [courses, setCourses] = useState({});
+  const [markdownCourses, setMarkdownCourses] = useState({});
   const [totalPoints, setTotalPoints] = useState(0);
   const [error, setError] = useState(null);
 
@@ -92,14 +95,14 @@ export default function SkillTracker() {
   };
 
   const fetchCourses = async (skill, idx) => {
-    if (courses[skill.skill_name]) return;
-    
+    if (courses[skill.skill_name] || markdownCourses[skill.skill_name]) return;
+
     const spent = await deductCredit();
-    if (!spent) { 
-      window.dispatchEvent(new CustomEvent("collade:upgrade")); 
-      return; 
+    if (!spent) {
+      window.dispatchEvent(new CustomEvent("collade:upgrade"));
+      return;
     }
-    
+
     setLoadingIdx(idx);
     setError(null);
     try {
@@ -107,40 +110,34 @@ export default function SkillTracker() {
 
 Return a JSON object with:
 - courses (array of: title, platform, duration, free, url_hint)
-- unlocked_paths (array of strings)`;
+- unlocked_paths (array of strings)
 
-      const response = await invokeLLM({ 
-        prompt: prompt,
-        query: prompt
-      });
+IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
 
+      const response = await invokeLLM({ prompt, query: prompt });
       console.log('[SkillTracker] Courses response:', response);
 
-      let parsedData = null;
-      if (typeof response === 'string') {
-        const jsonMatch = response.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          try {
-            parsedData = JSON.parse(jsonMatch[0]);
-          } catch (e) {
-            console.error('[SkillTracker] JSON parse error:', e);
-          }
-        }
-      } else if (typeof response === 'object') {
-        parsedData = response;
+      const parsed = parseAIResponse(response);
+      console.log('[SkillTracker] Parsed type:', parsed.type);
+
+      if (parsed.type === 'json' && parsed.data) {
+        setCourses(prev => ({
+          ...prev,
+          [skill.skill_name]: {
+            courses: extractArray(parsed.data, ['courses']),
+            unlocked_paths: parsed.data.unlocked_paths || [],
+          },
+        }));
+      } else if (parsed.type === 'markdown') {
+        setMarkdownCourses(prev => ({ ...prev, [skill.skill_name]: parsed.raw }));
+      } else {
+        setError('No courses found. Please try again.');
       }
-
-      const courseData = {
-        courses: parsedData?.courses || [],
-        unlocked_paths: parsedData?.unlocked_paths || []
-      };
-
-      setCourses(prev => ({ ...prev, [skill.skill_name]: courseData }));
     } catch (err) {
       console.error('[SkillTracker] Fetch courses error:', err);
       setError('Failed to fetch courses. Please try again.');
-    } finally { 
-      setLoadingIdx(null); 
+    } finally {
+      setLoadingIdx(null);
     }
   };
 
@@ -153,14 +150,12 @@ Return a JSON object with:
     <div className="space-y-6">
       <SectionHeader title="Skill Tracker" subtitle="Track what you're learning, earn points, unlock career paths" icon={Brain} />
 
-      {/* Error Message */}
       {error && (
         <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4 text-destructive">
           <p className="text-sm">{error}</p>
         </div>
       )}
 
-      {/* Level card */}
       <div className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-2xl p-5">
         <div className="flex items-center justify-between mb-2">
           <div>
@@ -177,7 +172,6 @@ Return a JSON object with:
         {nextLevel && <p className="text-[11px] text-muted-foreground mt-1">{nextLevel.min - totalPoints} XP to {nextLevel.name}</p>}
       </div>
 
-      {/* Add skill */}
       <div className="bg-card border border-border rounded-xl p-4 space-y-3">
         <div className="flex gap-2">
           <input
@@ -198,7 +192,6 @@ Return a JSON object with:
         </div>
       </div>
 
-      {/* Skill list */}
       <div className="space-y-3">
         {skills.length === 0 && (
           <p className="text-center text-muted-foreground text-sm py-10">Add your first skill to get started!</p>
@@ -224,26 +217,44 @@ Return a JSON object with:
                 </div>
               </div>
 
-              {/* Courses panel */}
               <AnimatePresence>
-                {courses[skill.skill_name] && (
+                {(courses[skill.skill_name] || markdownCourses[skill.skill_name]) && (
                   <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
                     <div className="pt-2 border-t border-border space-y-2">
-                      {(courses[skill.skill_name].courses || []).map((c, i) => (
-                        <div key={i} className="flex items-center justify-between text-xs bg-secondary rounded-lg px-3 py-2">
-                          <div>
-                            <p className="font-medium">{c.title || "Course"}</p>
-                            <p className="text-muted-foreground">{c.platform || "Online"} • {c.duration || "Varies"}</p>
-                          </div>
-                          {c.free && <span className="text-[10px] bg-green-100 text-green-600 px-2 py-0.5 rounded-md font-semibold">FREE</span>}
-                        </div>
-                      ))}
-                      {(courses[skill.skill_name].unlocked_paths || []).length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 pt-1">
-                          <span className="text-[11px] text-muted-foreground">Unlocks:</span>
-                          {courses[skill.skill_name].unlocked_paths.map((p, i) => (
-                            <span key={i} className="text-[11px] bg-accent/10 text-accent px-2 py-0.5 rounded-md font-medium">{p}</span>
+                      {/* Structured course list */}
+                      {courses[skill.skill_name] && (
+                        <>
+                          {(courses[skill.skill_name].courses || []).map((c, i) => (
+                            <div key={i} className="flex items-center justify-between text-xs bg-secondary rounded-lg px-3 py-2">
+                              <div>
+                                <p className="font-medium">{c.title || "Course"}</p>
+                                <p className="text-muted-foreground">{c.platform || "Online"} • {c.duration || "Varies"}</p>
+                              </div>
+                              {c.free && <span className="text-[10px] bg-green-100 text-green-600 px-2 py-0.5 rounded-md font-semibold">FREE</span>}
+                            </div>
                           ))}
+                          {(courses[skill.skill_name].unlocked_paths || []).length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 pt-1">
+                              <span className="text-[11px] text-muted-foreground">Unlocks:</span>
+                              {courses[skill.skill_name].unlocked_paths.map((p, i) => (
+                                <span key={i} className="text-[11px] bg-accent/10 text-accent px-2 py-0.5 rounded-md font-medium">{p}</span>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      {/* Markdown fallback */}
+                      {markdownCourses[skill.skill_name] && (
+                        <div className="prose prose-invert prose-xs max-w-none
+                          prose-headings:text-foreground prose-headings:font-bold
+                          prose-h2:text-sm prose-h2:mt-3 prose-h2:mb-1.5
+                          prose-h3:text-xs prose-h3:mt-2 prose-h3:mb-1
+                          prose-p:text-muted-foreground prose-p:my-1 prose-p:text-xs
+                          prose-li:text-muted-foreground prose-li:my-0.5 prose-li:text-xs
+                          prose-strong:text-foreground
+                        ">
+                          <ReactMarkdown>{markdownCourses[skill.skill_name]}</ReactMarkdown>
                         </div>
                       )}
                     </div>

@@ -1,8 +1,10 @@
 import { useState } from "react";
-import { Smile, ArrowRight, Loader2, RefreshCw } from "lucide-react";
+import { Smile, ArrowRight, RefreshCw } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 import { useCredits } from "@/hooks/useCredits";
 import FeatureGate from "../components/FeatureGate";
 import { invokeLLM } from "@/api/llm";
+import { parseAIResponse, extractArray } from "@/lib/aiResponseHandler";
 import SectionHeader from "../components/SectionHeader";
 import CareerCard from "../components/CareerCard";
 import LoadingGrid from "../components/LoadingGrid";
@@ -57,6 +59,7 @@ export default function PersonalityQuiz() {
   const { deductCredit } = useCredits();
   const [answers, setAnswers] = useState({});
   const [result, setResult] = useState(null);
+  const [markdownFallback, setMarkdownFallback] = useState("");
   const [loading, setLoading] = useState(false);
   const [currentQ, setCurrentQ] = useState(0);
   const [error, setError] = useState(null);
@@ -73,23 +76,22 @@ export default function PersonalityQuiz() {
 
   const analyze = async () => {
     const spent = await deductCredit();
-    if (!spent) { 
-      window.dispatchEvent(new CustomEvent("collade:upgrade")); 
-      return; 
+    if (!spent) {
+      window.dispatchEvent(new CustomEvent("collade:upgrade"));
+      return;
     }
-    
+
     setLoading(true);
     setError(null);
-    
+    setMarkdownFallback("");
+
     const profile = QUESTIONS.map((q, i) => `${q.q} → ${q.options.find(o => o.value === answers[i])?.label || answers[i]}`).join("\n");
-    
+
     try {
       const prompt = `Based on this personality quiz for a high school/college student, determine their personality type and give career recommendations:
 
 Quiz Answers:
 ${profile}
-
-Give a fun, encouraging, and detailed personality analysis with tailored career and course suggestions.
 
 Return a JSON object with:
 - personality_type (string)
@@ -102,71 +104,59 @@ Return a JSON object with:
 - recommended_courses (array of: name, stream, level, duration, short_description, salary_range, ai_impact, growth, locations)
 - recommended_careers (array)
 - avoid_these (array)
-- motivational_message (string)`;
+- motivational_message (string)
 
-      const response = await invokeLLM({ 
-        prompt: prompt,
-        query: prompt
-      });
+IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
 
+      const response = await invokeLLM({ prompt, query: prompt });
       console.log('[PersonalityQuiz] Raw response:', response);
 
-      let parsedData = null;
-      if (typeof response === 'string') {
-        const jsonMatch = response.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          try {
-            parsedData = JSON.parse(jsonMatch[0]);
-          } catch (e) {
-            console.error('[PersonalityQuiz] JSON parse error:', e);
-          }
-        }
-      } else if (typeof response === 'object') {
-        parsedData = response;
+      const parsed = parseAIResponse(response);
+      console.log('[PersonalityQuiz] Parsed type:', parsed.type);
+
+      if (parsed.type === 'json' && parsed.data) {
+        const d = parsed.data;
+        setResult({
+          personality_type: d.personality_type || "",
+          personality_emoji: d.personality_emoji || "✨",
+          personality_description: d.personality_description || "",
+          strengths: d.strengths || [],
+          growth_areas: d.growth_areas || [],
+          work_style: d.work_style || "",
+          famous_examples: d.famous_examples || [],
+          recommended_courses: extractArray(d, ['recommended_courses', 'courses']),
+          recommended_careers: d.recommended_careers || [],
+          avoid_these: d.avoid_these || [],
+          motivational_message: d.motivational_message || "",
+        });
+      } else if (parsed.type === 'markdown') {
+        setMarkdownFallback(parsed.raw);
+      } else {
+        setError("No analysis returned. Please try again.");
       }
-
-      const personalityResult = {
-        personality_type: parsedData?.personality_type || "Creative Thinker",
-        personality_emoji: parsedData?.personality_emoji || "✨",
-        personality_description: parsedData?.personality_description || "You have a unique blend of creativity and analytical thinking.",
-        strengths: parsedData?.strengths || ["Curiosity", "Adaptability", "Problem solving"],
-        growth_areas: parsedData?.growth_areas || ["Focus", "Time management", "Public speaking"],
-        work_style: parsedData?.work_style || "You thrive in collaborative environments with clear goals.",
-        famous_examples: parsedData?.famous_examples || ["Innovative thinkers", "Creative problem solvers"],
-        recommended_courses: parsedData?.recommended_courses || [],
-        recommended_careers: parsedData?.recommended_careers || ["Creative careers", "Technology roles", "Business opportunities"],
-        avoid_these: parsedData?.avoid_these || [],
-        motivational_message: parsedData?.motivational_message || "Your unique combination of skills will take you far!"
-      };
-
-      console.log('[PersonalityQuiz] Parsed:', personalityResult);
-      setResult(personalityResult);
-
     } catch (err) {
       console.error('[PersonalityQuiz] Error:', err);
       setError(err.message || 'Failed to analyze personality. Please try again.');
-    } finally { 
-      setLoading(false); 
+    } finally {
+      setLoading(false);
     }
   };
 
-  const reset = () => { setAnswers({}); setResult(null); setCurrentQ(0); setError(null); };
+  const reset = () => { setAnswers({}); setResult(null); setMarkdownFallback(""); setCurrentQ(0); setError(null); };
 
   return (
     <FeatureGate onUpgrade={() => {}}>
     <div className="space-y-6">
       <SectionHeader title="Personality Analyzer" subtitle="A fun 6-question quiz to discover careers that fit YOU" icon={Smile} />
 
-      {/* Error Message */}
       {error && (
         <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4 text-destructive">
           <p className="text-sm">{error}</p>
         </div>
       )}
 
-      {!result && !loading && (
+      {!result && !loading && !markdownFallback && (
         <div className="space-y-4">
-          {/* Progress */}
           <div className="flex gap-1.5">
             {QUESTIONS.map((_, i) => (
               <div key={i} className={`flex-1 h-1.5 rounded-full transition-colors ${answers[i] ? "bg-primary" : i === currentQ ? "bg-primary/40" : "bg-secondary"}`} />
@@ -187,7 +177,6 @@ Return a JSON object with:
                 ))}
               </div>
 
-              {/* Navigation */}
               <div className="flex items-center justify-between pt-2">
                 <button onClick={() => setCurrentQ(Math.max(0, currentQ - 1))} disabled={currentQ === 0} className="text-sm text-muted-foreground hover:text-foreground disabled:opacity-30">← Previous</button>
                 {currentQ < QUESTIONS.length - 1 ? (
@@ -215,24 +204,23 @@ Return a JSON object with:
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
           <button onClick={reset} className="text-sm text-primary font-medium hover:underline">← Retake Quiz</button>
 
-          {/* Personality type card */}
           <div className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-2xl p-6 text-center">
             <p className="text-5xl mb-3">{result.personality_emoji || "✨"}</p>
-            <h2 className="font-heading text-2xl font-bold">{result.personality_type || "Creative Thinker"}</h2>
-            <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">{result.personality_description || "You have a unique blend of creativity and analytical thinking."}</p>
+            <h2 className="font-heading text-2xl font-bold">{result.personality_type}</h2>
+            <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">{result.personality_description}</p>
             {result.motivational_message && (
               <p className="mt-4 text-sm font-medium text-primary bg-primary/10 rounded-xl px-4 py-2">{result.motivational_message}</p>
             )}
           </div>
 
           <div className="grid sm:grid-cols-2 gap-4">
-            {result.strengths && result.strengths.length > 0 && (
+            {result.strengths?.length > 0 && (
               <div className="bg-card border border-border rounded-xl p-4">
                 <p className="text-xs font-semibold text-green-600 uppercase tracking-wider mb-2">✅ Your Strengths</p>
                 {result.strengths.map((s, i) => <p key={i} className="text-sm text-muted-foreground">• {s}</p>)}
               </div>
             )}
-            {result.growth_areas && result.growth_areas.length > 0 && (
+            {result.growth_areas?.length > 0 && (
               <div className="bg-card border border-border rounded-xl p-4">
                 <p className="text-xs font-semibold text-amber-600 uppercase tracking-wider mb-2">🌱 Growth Areas</p>
                 {result.growth_areas.map((s, i) => <p key={i} className="text-sm text-muted-foreground">• {s}</p>)}
@@ -247,7 +235,7 @@ Return a JSON object with:
             </div>
           )}
 
-          {result.famous_examples && result.famous_examples.length > 0 && (
+          {result.famous_examples?.length > 0 && (
             <div>
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Famous people with your type</p>
               <div className="flex flex-wrap gap-1.5">
@@ -256,7 +244,7 @@ Return a JSON object with:
             </div>
           )}
 
-          {result.recommended_courses && result.recommended_courses.length > 0 && (
+          {result.recommended_courses?.length > 0 && (
             <div>
               <h3 className="font-heading font-bold text-lg mb-3">🎯 Recommended Paths For You</h3>
               <div className="grid sm:grid-cols-2 gap-3">
@@ -265,7 +253,7 @@ Return a JSON object with:
             </div>
           )}
 
-          {result.recommended_careers && result.recommended_careers.length > 0 && (
+          {result.recommended_careers?.length > 0 && (
             <div className="bg-card border border-border rounded-xl p-4">
               <p className="text-xs font-semibold text-primary uppercase tracking-wider mb-2">🌟 Recommended Careers</p>
               <div className="flex flex-wrap gap-1.5">
@@ -274,7 +262,7 @@ Return a JSON object with:
             </div>
           )}
 
-          {result.avoid_these && result.avoid_these.length > 0 && (
+          {result.avoid_these?.length > 0 && (
             <div className="bg-secondary rounded-xl p-4">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">⚠️ Careers to Think Twice About</p>
               <div className="flex flex-wrap gap-1.5">
@@ -282,6 +270,22 @@ Return a JSON object with:
               </div>
             </div>
           )}
+        </motion.div>
+      )}
+
+      {!loading && markdownFallback && !result && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
+          <button onClick={reset} className="text-sm text-primary font-medium hover:underline">← Retake Quiz</button>
+          <div className="bg-card border border-border rounded-xl p-6 prose prose-invert prose-sm max-w-none
+            prose-headings:text-foreground prose-headings:font-bold
+            prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2
+            prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
+            prose-p:text-muted-foreground prose-p:my-1.5
+            prose-li:text-muted-foreground prose-li:my-0.5
+            prose-strong:text-foreground
+          ">
+            <ReactMarkdown>{markdownFallback}</ReactMarkdown>
+          </div>
         </motion.div>
       )}
     </div>

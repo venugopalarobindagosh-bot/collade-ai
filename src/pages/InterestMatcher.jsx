@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { Sparkles, X, Plus, ArrowRight } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 import { invokeLLM } from "@/api/llm";
 import { useCredits } from "@/hooks/useCredits";
+import { parseAIResponse, extractArray } from "@/lib/aiResponseHandler";
 import FeatureGate from "../components/FeatureGate";
 import SectionHeader from "../components/SectionHeader";
 import CareerCard from "../components/CareerCard";
@@ -21,6 +23,7 @@ export default function InterestMatcher() {
   const [interests, setInterests] = useState([]);
   const [inputVal, setInputVal] = useState("");
   const [results, setResults] = useState([]);
+  const [markdownFallback, setMarkdownFallback] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -37,30 +40,24 @@ export default function InterestMatcher() {
 
   const findMatches = async () => {
     if (interests.length === 0) return;
-    
+
     setError(null);
     const ok = await deductCredit();
-    if (!ok) { 
-      window.dispatchEvent(new CustomEvent("collade:upgrade")); 
-      return; 
+    if (!ok) {
+      window.dispatchEvent(new CustomEvent("collade:upgrade"));
+      return;
     }
-    
+
     setLoading(true);
     setResults([]);
-    
+    setMarkdownFallback("");
+
     try {
       const prompt = `A student has the following interests and hobbies: ${interests.join(", ")}.
 
-Based on these interests, suggest 10 diverse and creative career paths, degrees, diplomas, and certifications that would be an excellent fit. Include:
-- Mainstream options
-- Niche/unconventional paths
-- Emerging fields
-- Options at different education levels (diploma, undergraduate, postgraduate, certification)
-- Global opportunities
+Based on these interests, suggest 10 diverse and creative career paths, degrees, diplomas, and certifications that would be an excellent fit. Include mainstream options, niche/unconventional paths, emerging fields, and options at different education levels.
 
-For each, explain WHY it matches their interests. Be creative and think outside the box.
-
-Format your response as a JSON object with a "matches" array. Each match should have:
+Return a JSON object with a "matches" array. Each match should have:
 - name (string)
 - stream (string)
 - level (string)
@@ -72,66 +69,33 @@ Format your response as a JSON object with a "matches" array. Each match should 
 - growth (string)
 - locations (array of strings)
 - skills_needed (array of strings)
-- future_proof_score (string)`;
+- future_proof_score (string)
 
-      const response = await invokeLLM({ 
-        prompt: prompt,
-        query: prompt
-      });
+IMPORTANT: Return ONLY valid JSON. No markdown, no code fences, no explanation. Start your response with { and end with }.`;
 
+      const response = await invokeLLM({ prompt, query: prompt });
       console.log('[InterestMatcher] Raw response:', response);
 
-      // Parse the response - try to extract JSON
-      let parsedData = null;
-      
-      if (typeof response === 'string') {
-        // Try to find JSON in the response
-        const jsonMatch = response.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          try {
-            parsedData = JSON.parse(jsonMatch[0]);
-          } catch (e) {
-            console.error('[InterestMatcher] JSON parse error:', e);
-          }
+      const parsed = parseAIResponse(response);
+      console.log('[InterestMatcher] Parsed type:', parsed.type);
+
+      if (parsed.type === 'json') {
+        const matches = extractArray(parsed.data, ['matches', 'careers', 'results']);
+        console.log('[InterestMatcher] Extracted matches:', matches.length);
+        setResults(matches);
+        if (matches.length === 0) {
+          setMarkdownFallback(parsed.raw);
         }
-      } else if (typeof response === 'object') {
-        parsedData = response;
-      }
-
-      // Extract matches from parsed data
-      let matches = [];
-      if (parsedData?.matches) {
-        matches = parsedData.matches;
-      } else if (Array.isArray(parsedData)) {
-        matches = parsedData;
+      } else if (parsed.type === 'markdown') {
+        setMarkdownFallback(parsed.raw);
       } else {
-        // Try to extract from the response string
-        const lines = response.split('\n').filter(line => line.trim());
-        // If we can't parse JSON, create a simple match from the response
-        matches = [{
-          name: "Career Matches",
-          stream: "Various",
-          level: "Varies",
-          duration: "Varies",
-          short_description: response.substring(0, 200) + "...",
-          why_it_fits: "Based on your interests",
-          salary_range: "Varies by career",
-          ai_impact: "Medium",
-          growth: "Varies",
-          locations: ["Global"],
-          skills_needed: ["Adaptability", "Learning"],
-          future_proof_score: "Good"
-        }];
+        setError('No results returned. Please try again.');
       }
-
-      console.log('[InterestMatcher] Parsed matches:', matches);
-      setResults(matches);
-
     } catch (error) {
       console.error('[InterestMatcher] Error:', error);
       setError(error.message || 'Failed to find career matches. Please try again.');
-    } finally { 
-      setLoading(false); 
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -144,16 +108,13 @@ Format your response as a JSON object with a "matches" array. Each match should 
         icon={Sparkles}
       />
 
-      {/* Input area */}
       <div className="bg-card border border-border rounded-xl p-5 space-y-4">
         <div className="flex items-center gap-2">
           <input
             value={inputVal}
             onChange={(e) => setInputVal(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                addInterest(inputVal.trim());
-              }
+              if (e.key === "Enter") addInterest(inputVal.trim());
             }}
             placeholder="Type an interest or hobby and press Enter..."
             className="flex-1 bg-secondary rounded-lg px-3.5 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
@@ -166,7 +127,6 @@ Format your response as a JSON object with a "matches" array. Each match should 
           </button>
         </div>
 
-        {/* Selected interests */}
         <AnimatePresence>
           {interests.length > 0 && (
             <motion.div
@@ -192,7 +152,6 @@ Format your response as a JSON object with a "matches" array. Each match should 
           )}
         </AnimatePresence>
 
-        {/* Suggestions */}
         <div>
           <p className="text-xs text-muted-foreground mb-2">Quick add:</p>
           <div className="flex flex-wrap gap-1.5">
@@ -208,7 +167,6 @@ Format your response as a JSON object with a "matches" array. Each match should 
           </div>
         </div>
 
-        {/* Find matches button */}
         <button
           onClick={findMatches}
           disabled={interests.length === 0 || loading}
@@ -220,14 +178,12 @@ Format your response as a JSON object with a "matches" array. Each match should 
         </button>
       </div>
 
-      {/* Error Message */}
       {error && (
         <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4 text-destructive">
           <p className="text-sm">{error}</p>
         </div>
       )}
 
-      {/* Results */}
       {loading && <LoadingGrid text="AI is analyzing your interests..." />}
 
       {!loading && results.length > 0 && (
@@ -260,6 +216,24 @@ Format your response as a JSON object with a "matches" array. Each match should 
               </div>
             </motion.div>
           ))}
+        </motion.div>
+      )}
+
+      {!loading && markdownFallback && results.length === 0 && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Career matches for <span className="font-semibold text-foreground">your interests</span>:
+          </p>
+          <div className="bg-card border border-border rounded-xl p-6 prose prose-invert prose-sm max-w-none
+            prose-headings:text-foreground prose-headings:font-bold
+            prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2
+            prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
+            prose-p:text-muted-foreground prose-p:my-1.5
+            prose-li:text-muted-foreground prose-li:my-0.5
+            prose-strong:text-foreground
+          ">
+            <ReactMarkdown>{markdownFallback}</ReactMarkdown>
+          </div>
         </motion.div>
       )}
     </div>
