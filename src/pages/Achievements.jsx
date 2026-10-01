@@ -8,87 +8,87 @@ import SectionHeader from "../components/SectionHeader";
 import { motion } from "framer-motion";
 
 // ── Badge definitions ──
-// requirement: function that receives ({ totalPoints, completedSkills, simulationsRun, careerPathsExplored }) and returns true/false
+// Every badge unlocks based on total XP OR skills completed (both are tracked).
 const ALL_BADGES = [
   {
     id: "explorer",
     name: "Explorer",
     emoji: "🧭",
-    desc: "Explored 5+ career paths",
+    desc: "Earn 100 XP",
     xp: 50,
-    requirement: (s) => s.careerPathsExplored >= 5,
+    requirement: (s) => s.totalPoints >= 100,
   },
   {
     id: "ai_ready",
     name: "AI-Ready",
     emoji: "🤖",
-    desc: "Learned 3+ tech skills",
+    desc: "Complete 3 skills",
     xp: 100,
     requirement: (s) => s.completedSkills >= 3,
-  },
-  {
-    id: "future_ceo",
-    name: "Future CEO",
-    emoji: "👑",
-    desc: "Completed Career Simulator",
-    xp: 150,
-    requirement: (s) => s.simulationsRun >= 1,
   },
   {
     id: "skill_builder",
     name: "Skill Builder",
     emoji: "🔨",
-    desc: "Completed 5+ skills",
+    desc: "Complete 5 skills",
     xp: 75,
     requirement: (s) => s.completedSkills >= 5,
+  },
+  {
+    id: "future_ceo",
+    name: "Future CEO",
+    emoji: "👑",
+    desc: "Earn 300 XP",
+    xp: 150,
+    requirement: (s) => s.totalPoints >= 300,
   },
   {
     id: "globe_trotter",
     name: "Globe Trotter",
     emoji: "🌍",
-    desc: "Explored 3+ dream locations",
+    desc: "Earn 500 XP",
     xp: 80,
-    requirement: (s) => s.careerPathsExplored >= 3,
+    requirement: (s) => s.totalPoints >= 500,
   },
   {
     id: "community_star",
     name: "Community Star",
     emoji: "⭐",
-    desc: "Posted first question",
+    desc: "Complete 10 skills",
     xp: 30,
-    requirement: (s) => s.simulationsRun >= 0, // TODO: track community posts
+    requirement: (s) => s.completedSkills >= 10,
   },
   {
     id: "quiz_master",
     name: "Quiz Master",
     emoji: "🎯",
-    desc: "Completed Personality Quiz",
+    desc: "Earn 800 XP",
     xp: 60,
-    requirement: (s) => s.simulationsRun >= 0, // TODO: track quiz completions
+    requirement: (s) => s.totalPoints >= 800,
   },
   {
     id: "trend_watcher",
     name: "Trend Watcher",
     emoji: "📈",
-    desc: "Checked Future Trends",
+    desc: "Earn 1,200 XP",
     xp: 40,
-    requirement: (s) => s.simulationsRun >= 0, // TODO: track trends views
+    requirement: (s) => s.totalPoints >= 1200,
   },
   {
     id: "scholar",
     name: "Scholar",
     emoji: "🎓",
-    desc: "Explored 10+ degree paths",
+    desc: "Complete 20 skills",
     xp: 120,
-    requirement: (s) => s.careerPathsExplored >= 10,
+    requirement: (s) => s.completedSkills >= 20,
   },
   {
     id: "pathfinder",
     name: "PathFinder Pro",
     emoji: "🚀",
-    desc: "Earned 500+ XP",
+    desc: "Earn 2,000 XP",
     xp: 200,
-    requirement: (s) => s.totalPoints >= 500,
+    requirement: (s) => s.totalPoints >= 2000,
   },
 ];
 
@@ -105,7 +105,6 @@ export default function Achievements() {
   const [skills, setSkills] = useState([]);
   const [earnedBadges, setEarnedBadges] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [userEmail, setUserEmail] = useState(null);
 
   useEffect(() => {
     getCurrentUser().then(me => {
@@ -113,7 +112,6 @@ export default function Achievements() {
         setLoading(false);
         return;
       }
-      setUserEmail(me.email);
 
       Promise.all([
         entities.UserAchievement.filter({ created_by: me.email }, "-created_date", 1),
@@ -125,8 +123,6 @@ export default function Achievements() {
         // ── Calculate stats from actual data ──
         const totalPoints = skillList.reduce((acc, s) => acc + (s.points || 0), 0);
         const completedSkills = skillList.filter(s => s.status === "completed").length;
-
-        // Pull from achievement record if exists
         const simulationsRun = existingAchievement?.simulations_run || 0;
         const careerPathsExplored = existingAchievement?.career_paths_explored || 0;
 
@@ -176,7 +172,6 @@ export default function Achievements() {
             }
           } catch (err) {
             console.error('[Achievements] Auto-unlock failed:', err);
-            // Fall back to local state so UI still shows correct data
             setAchievement({
               total_points: totalPoints,
               badges: allEarnedBadges,
