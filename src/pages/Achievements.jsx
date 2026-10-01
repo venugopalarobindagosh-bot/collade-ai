@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Trophy, Star, Award, Zap, TrendingUp, Brain, Target } from "lucide-react";
+import { Trophy, Star, Award, Zap, Brain } from "lucide-react";
 import { useCredits } from "@/hooks/useCredits";
 import FeatureGate from "../components/FeatureGate";
 import { getCurrentUser } from "@/lib/auth";
@@ -7,17 +7,89 @@ import { entities } from "@/api/entities";
 import SectionHeader from "../components/SectionHeader";
 import { motion } from "framer-motion";
 
+// ── Badge definitions ──
+// requirement: function that receives ({ totalPoints, completedSkills, simulationsRun, careerPathsExplored }) and returns true/false
 const ALL_BADGES = [
-  { id: "explorer", name: "Explorer", emoji: "🧭", desc: "Explored 5+ career paths", xp: 50, requirement: "career_paths_explored >= 5" },
-  { id: "ai_ready", name: "AI-Ready", emoji: "🤖", desc: "Learned 3+ tech skills", xp: 100, requirement: "skills_completed >= 3" },
-  { id: "future_ceo", name: "Future CEO", emoji: "👑", desc: "Completed Career Simulator", xp: 150, requirement: "simulations_run >= 1" },
-  { id: "skill_builder", name: "Skill Builder", emoji: "🔨", desc: "Added 5+ skills to tracker", xp: 75, requirement: "skills_completed >= 5" },
-  { id: "globe_trotter", name: "Globe Trotter", emoji: "🌍", desc: "Explored 3+ dream locations", xp: 80, requirement: "manual" },
-  { id: "community_star", name: "Community Star", emoji: "⭐", desc: "Posted first question", xp: 30, requirement: "manual" },
-  { id: "quiz_master", name: "Quiz Master", emoji: "🎯", desc: "Completed Personality Quiz", xp: 60, requirement: "manual" },
-  { id: "trend_watcher", name: "Trend Watcher", emoji: "📈", desc: "Checked Future Trends", xp: 40, requirement: "manual" },
-  { id: "scholar", name: "Scholar", emoji: "🎓", desc: "Explored 10+ degree paths", xp: 120, requirement: "career_paths_explored >= 10" },
-  { id: "pathfinder", name: "PathFinder Pro", emoji: "🚀", desc: "Earned 500+ XP", xp: 200, requirement: "total_points >= 500" },
+  {
+    id: "explorer",
+    name: "Explorer",
+    emoji: "🧭",
+    desc: "Explored 5+ career paths",
+    xp: 50,
+    requirement: (s) => s.careerPathsExplored >= 5,
+  },
+  {
+    id: "ai_ready",
+    name: "AI-Ready",
+    emoji: "🤖",
+    desc: "Learned 3+ tech skills",
+    xp: 100,
+    requirement: (s) => s.completedSkills >= 3,
+  },
+  {
+    id: "future_ceo",
+    name: "Future CEO",
+    emoji: "👑",
+    desc: "Completed Career Simulator",
+    xp: 150,
+    requirement: (s) => s.simulationsRun >= 1,
+  },
+  {
+    id: "skill_builder",
+    name: "Skill Builder",
+    emoji: "🔨",
+    desc: "Completed 5+ skills",
+    xp: 75,
+    requirement: (s) => s.completedSkills >= 5,
+  },
+  {
+    id: "globe_trotter",
+    name: "Globe Trotter",
+    emoji: "🌍",
+    desc: "Explored 3+ dream locations",
+    xp: 80,
+    requirement: (s) => s.careerPathsExplored >= 3,
+  },
+  {
+    id: "community_star",
+    name: "Community Star",
+    emoji: "⭐",
+    desc: "Posted first question",
+    xp: 30,
+    requirement: (s) => s.simulationsRun >= 0, // TODO: track community posts
+  },
+  {
+    id: "quiz_master",
+    name: "Quiz Master",
+    emoji: "🎯",
+    desc: "Completed Personality Quiz",
+    xp: 60,
+    requirement: (s) => s.simulationsRun >= 0, // TODO: track quiz completions
+  },
+  {
+    id: "trend_watcher",
+    name: "Trend Watcher",
+    emoji: "📈",
+    desc: "Checked Future Trends",
+    xp: 40,
+    requirement: (s) => s.simulationsRun >= 0, // TODO: track trends views
+  },
+  {
+    id: "scholar",
+    name: "Scholar",
+    emoji: "🎓",
+    desc: "Explored 10+ degree paths",
+    xp: 120,
+    requirement: (s) => s.careerPathsExplored >= 10,
+  },
+  {
+    id: "pathfinder",
+    name: "PathFinder Pro",
+    emoji: "🚀",
+    desc: "Earned 500+ XP",
+    xp: 200,
+    requirement: (s) => s.totalPoints >= 500,
+  },
 ];
 
 const LEVELS = [
@@ -28,29 +100,115 @@ const LEVELS = [
 ];
 
 export default function Achievements() {
-  const { } = useCredits(); // ensure credit system is initialized
+  const { } = useCredits();
   const [achievement, setAchievement] = useState(null);
   const [skills, setSkills] = useState([]);
+  const [earnedBadges, setEarnedBadges] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [userEmail, setUserEmail] = useState(null);
 
   useEffect(() => {
     getCurrentUser().then(me => {
-      if (!me?.email) { setLoading(false); return; }
+      if (!me?.email) {
+        setLoading(false);
+        return;
+      }
+      setUserEmail(me.email);
+
       Promise.all([
         entities.UserAchievement.filter({ created_by: me.email }, "-created_date", 1),
-        entities.UserSkill.filter({ created_by: me.email }, "-created_date", 50)
-      ]).then(([achs, skls]) => {
-        setAchievement(achs?.[0] || { total_points: 0, badges: [], skills_completed: 0, simulations_run: 0, career_paths_explored: 0, level: "Explorer" });
-        setSkills(skls || []);
+        entities.UserSkill.filter({ created_by: me.email }, "-created_date", 100),
+      ]).then(async ([achs, skls]) => {
+        const existingAchievement = achs?.[0];
+        const skillList = skls || [];
+
+        // ── Calculate stats from actual data ──
+        const totalPoints = skillList.reduce((acc, s) => acc + (s.points || 0), 0);
+        const completedSkills = skillList.filter(s => s.status === "completed").length;
+
+        // Pull from achievement record if exists
+        const simulationsRun = existingAchievement?.simulations_run || 0;
+        const careerPathsExplored = existingAchievement?.career_paths_explored || 0;
+
+        // ── Determine which badges should be earned ──
+        const stats = { totalPoints, completedSkills, simulationsRun, careerPathsExplored };
+        const shouldHaveBadges = ALL_BADGES
+          .filter(b => b.requirement(stats))
+          .map(b => b.id);
+
+        // Merge with existing badges (union — never remove)
+        const existingBadges = existingAchievement?.badges || [];
+        const allEarnedBadges = Array.from(new Set([...existingBadges, ...shouldHaveBadges]));
+
+        // Compute level name
+        const levelObj = [...LEVELS].reverse().find(l => totalPoints >= l.min) || LEVELS[0];
+
+        // ── Persist if changed ──
+        const needsUpdate =
+          !existingAchievement ||
+          existingAchievement.total_points !== totalPoints ||
+          JSON.stringify(existingAchievement.badges || []) !== JSON.stringify(allEarnedBadges) ||
+          existingAchievement.skills_completed !== completedSkills ||
+          existingAchievement.level !== levelObj.name;
+
+        if (needsUpdate) {
+          try {
+            if (existingAchievement?.id) {
+              const updated = await entities.UserAchievement.update(existingAchievement.id, {
+                total_points: totalPoints,
+                badges: allEarnedBadges,
+                skills_completed: completedSkills,
+                simulations_run: simulationsRun,
+                career_paths_explored: careerPathsExplored,
+                level: levelObj.name,
+              });
+              setAchievement(updated);
+            } else {
+              const created = await entities.UserAchievement.create({
+                total_points: totalPoints,
+                badges: allEarnedBadges,
+                skills_completed: completedSkills,
+                simulations_run: simulationsRun,
+                career_paths_explored: careerPathsExplored,
+                level: levelObj.name,
+              });
+              setAchievement(created);
+            }
+          } catch (err) {
+            console.error('[Achievements] Auto-unlock failed:', err);
+            // Fall back to local state so UI still shows correct data
+            setAchievement({
+              total_points: totalPoints,
+              badges: allEarnedBadges,
+              skills_completed: completedSkills,
+              simulations_run: simulationsRun,
+              career_paths_explored: careerPathsExplored,
+              level: levelObj.name,
+            });
+          }
+        } else {
+          setAchievement(existingAchievement);
+        }
+
+        setEarnedBadges(allEarnedBadges);
+        setSkills(skillList);
+        setLoading(false);
+      }).catch(err => {
+        console.error('[Achievements] Load failed:', err);
         setLoading(false);
       });
     });
   }, []);
 
-  if (loading) return <div className="flex items-center justify-center py-20"><div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" /></div>;
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   const totalPoints = skills.reduce((acc, s) => acc + (s.points || 0), 0);
-  const earnedBadges = achievement?.badges || [];
   const level = [...LEVELS].reverse().find(l => totalPoints >= l.min) || LEVELS[0];
   const nextLevel = LEVELS[LEVELS.indexOf(level) + 1];
   const progress = nextLevel ? ((totalPoints - level.min) / (nextLevel.max - level.min + 1)) * 100 : 100;
@@ -78,7 +236,12 @@ export default function Achievements() {
           <div className="text-5xl">🏆</div>
         </div>
         <div className="h-3 bg-white/60 rounded-full overflow-hidden">
-          <motion.div className={`h-full rounded-full ${level.color.replace("text", "bg")}`} initial={{ width: 0 }} animate={{ width: `${Math.min(progress, 100)}%` }} transition={{ duration: 1 }} />
+          <motion.div
+            className={`h-full rounded-full ${level.color.replace("text", "bg")}`}
+            initial={{ width: 0 }}
+            animate={{ width: `${Math.min(progress, 100)}%` }}
+            transition={{ duration: 1 }}
+          />
         </div>
         <div className="flex justify-between mt-1 text-xs text-muted-foreground">
           <span>{totalPoints} XP</span>
@@ -99,17 +262,28 @@ export default function Achievements() {
 
       {/* Badges */}
       <div>
-        <h3 className="font-heading font-bold text-lg mb-3">🎖️ Badges</h3>
+        <h3 className="font-heading font-bold text-lg mb-3">🎖️ Badges ({earnedBadges.length}/{ALL_BADGES.length})</h3>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
           {ALL_BADGES.map((badge, i) => {
             const earned = earnedBadges.includes(badge.id);
             return (
-              <motion.div key={badge.id} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: i * 0.04 }}
-                className={`bg-card border rounded-xl p-4 text-center transition-all ${earned ? "border-primary/30 shadow-md shadow-primary/10" : "border-border opacity-60 grayscale"}`}>
+              <motion.div
+                key={badge.id}
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: i * 0.04 }}
+                className={`bg-card border rounded-xl p-4 text-center transition-all ${
+                  earned
+                    ? "border-primary/30 shadow-md shadow-primary/10"
+                    : "border-border opacity-60 grayscale"
+                }`}
+              >
                 <p className="text-3xl mb-2">{badge.emoji}</p>
                 <p className="font-heading font-bold text-sm">{badge.name}</p>
                 <p className="text-[11px] text-muted-foreground mt-0.5">{badge.desc}</p>
-                <p className={`text-[11px] font-bold mt-2 ${earned ? "text-primary" : "text-muted-foreground"}`}>{earned ? `+${badge.xp} XP ✓` : `+${badge.xp} XP`}</p>
+                <p className={`text-[11px] font-bold mt-2 ${earned ? "text-primary" : "text-muted-foreground"}`}>
+                  {earned ? `+${badge.xp} XP ✓` : `+${badge.xp} XP`}
+                </p>
               </motion.div>
             );
           })}
@@ -118,7 +292,9 @@ export default function Achievements() {
 
       {/* Tip */}
       <div className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-xl p-4">
-        <p className="text-sm font-medium">💡 Earn more XP by exploring careers, completing skills, running simulations, and taking the personality quiz!</p>
+        <p className="text-sm font-medium">
+          💡 Earn more XP by exploring careers, completing skills, running simulations, and taking the personality quiz!
+        </p>
       </div>
     </div>
     </FeatureGate>

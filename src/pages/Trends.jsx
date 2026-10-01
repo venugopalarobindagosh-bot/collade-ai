@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState } from "react";
 import { invokeLLM } from "@/api/llm";
 import { useCredits } from "@/hooks/useCredits";
 import { parseAIResponse, extractArray } from "@/lib/aiResponseHandler";
@@ -18,7 +18,6 @@ export default function Trends() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const { deductCredit } = useCredits();
-  const fetchedRef = useRef(false);
 
   const fetchTrends = async (stream) => {
     const ok = await deductCredit();
@@ -33,7 +32,7 @@ export default function Trends() {
     setError(null);
 
     try {
-      const prompt = `You are a career trends expert. Provide the top 8 emerging career trends in "${stream}" for 2024-2030.
+      const prompt = `You are a career trends expert. Provide the top 15 emerging career trends in "${stream}" for 2024-2030.
 
 For each trend include:
 - title (string)
@@ -46,9 +45,15 @@ For each trend include:
 Return a JSON object with:
 - stream (string)
 - summary (string)
-- trends (array of the above objects)
+- trends (array of 15 objects)
 
-IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
+RULES:
+- Start with { and end with }
+- Do NOT wrap in markdown code fences
+- Do NOT add any text before or after the JSON
+- Include all 15 trends
+
+JSON ONLY. BEGIN:`;
 
       const response = await invokeLLM({ prompt, query: prompt });
       console.log('[Trends] Raw response:', response);
