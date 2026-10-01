@@ -1,14 +1,16 @@
 import { useState, useEffect, useRef } from "react";
-import { Award, Download, Sparkles, Check, Shield, Lock, ChevronRight } from "lucide-react";
+import { Award, Download, Sparkles, Check, Shield, Lock } from "lucide-react";
 import { useCredits } from "@/hooks/useCredits";
 import FeatureGate from "../components/FeatureGate";
 import { entities } from "@/api/entities";
 import { getCurrentUser } from "@/lib/auth";
-import { LOGO_URL } from "@/lib/constants";
 import SectionHeader from "../components/SectionHeader";
 import { motion } from "framer-motion";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
+
+// Logo — served from /public folder
+const LOGO_URL = "/collade-logo.png";
 
 const REQUIRED_SKILLS = 3;
 const REQUIRED_BADGES = 1;
@@ -37,11 +39,9 @@ const CAREER_PATHS = [
   "Marketing", "Mechanical Engineering", "Biotechnology", "AI/ML Engineering",
 ];
 
-// ── Cryptographically random certificate ID ──
 function generateCertId() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let id = "";
-  // Use crypto.getRandomValues for better randomness
   try {
     const randomBytes = new Uint8Array(16);
     crypto.getRandomValues(randomBytes);
@@ -57,7 +57,7 @@ function generateCertId() {
 }
 
 // ────────────────────────────────────────────────────────
-// CERTIFICATE COMPONENT — fixed 1200x850 aspect, never cut off
+// CERTIFICATE COMPONENT — fixed 1200x850 aspect
 // ────────────────────────────────────────────────────────
 function Certificate({
   studentName,
@@ -93,7 +93,7 @@ function Certificate({
         color: INK,
       }}
     >
-      {/* Watermark logo (behind everything) */}
+      {/* Watermark logo */}
       <div
         style={{
           position: "absolute",
@@ -105,10 +105,15 @@ function Certificate({
           zIndex: 0,
         }}
       >
-        <img src={LOGO_URL} alt="" style={{ width: 520, height: 520, objectFit: "contain" }} />
+        <img
+          src={LOGO_URL}
+          alt=""
+          crossOrigin="anonymous"
+          style={{ width: 520, height: 520, objectFit: "contain" }}
+        />
       </div>
 
-      {/* Outer gold border */}
+      {/* Double gold border */}
       <div
         style={{
           position: "absolute",
@@ -128,10 +133,10 @@ function Certificate({
 
       {/* Corner ornaments */}
       {[
-        { top: 24, left: 24 },
-        { top: 24, right: 24 },
-        { bottom: 24, left: 24 },
-        { bottom: 24, right: 24 },
+        { top: 24, left: 24, bt: true, bl: true },
+        { top: 24, right: 24, bt: true, br: true },
+        { bottom: 24, left: 24, bb: true, bl: true },
+        { bottom: 24, right: 24, bb: true, br: true },
       ].map((pos, i) => (
         <div
           key={i}
@@ -139,12 +144,15 @@ function Certificate({
             position: "absolute",
             width: 40,
             height: 40,
-            ...pos,
+            top: pos.top,
+            bottom: pos.bottom,
+            left: pos.left,
+            right: pos.right,
             zIndex: 2,
-            borderTop: pos.top !== undefined ? `3px solid ${GOLD}` : "none",
-            borderBottom: pos.bottom !== undefined ? `3px solid ${GOLD}` : "none",
-            borderLeft: pos.left !== undefined ? `3px solid ${GOLD}` : "none",
-            borderRight: pos.right !== undefined ? `3px solid ${GOLD}` : "none",
+            borderTop: pos.bt ? `3px solid ${GOLD}` : "none",
+            borderBottom: pos.bb ? `3px solid ${GOLD}` : "none",
+            borderLeft: pos.bl ? `3px solid ${GOLD}` : "none",
+            borderRight: pos.br ? `3px solid ${GOLD}` : "none",
           }}
         />
       ))}
@@ -176,7 +184,7 @@ function Certificate({
           flexDirection: "column",
         }}
       >
-        {/* ── HEADER ── */}
+        {/* HEADER */}
         <div
           style={{
             display: "flex",
@@ -185,7 +193,6 @@ function Certificate({
             marginBottom: 34,
           }}
         >
-          {/* Left: Logo + brand */}
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <img
               src={LOGO_URL}
@@ -196,7 +203,7 @@ function Certificate({
                 height: 54,
                 borderRadius: 14,
                 objectFit: "cover",
-                boxShadow: `0 2px 8px rgba(108,71,255,0.18)`,
+                boxShadow: "0 2px 8px rgba(108,71,255,0.18)",
               }}
             />
             <div>
@@ -218,7 +225,6 @@ function Certificate({
             </div>
           </div>
 
-          {/* Right: Cert ID */}
           <div style={{ textAlign: "right" }}>
             <div
               style={{
@@ -246,7 +252,7 @@ function Certificate({
           </div>
         </div>
 
-        {/* ── TITLE BLOCK ── */}
+        {/* TITLE */}
         <div style={{ textAlign: "center", marginBottom: 32 }}>
           <div
             style={{
@@ -260,17 +266,10 @@ function Certificate({
           >
             Certificate of Achievement
           </div>
-          <div
-            style={{
-              width: 90,
-              height: 2,
-              background: GOLD,
-              margin: "0 auto",
-            }}
-          />
+          <div style={{ width: 90, height: 2, background: GOLD, margin: "0 auto" }} />
         </div>
 
-        {/* ── PRESENTED TO ── */}
+        {/* PRESENTED TO */}
         <div style={{ textAlign: "center", marginBottom: 26 }}>
           <div
             style={{
@@ -314,16 +313,8 @@ function Certificate({
           </div>
         </div>
 
-        {/* ── STATS + BADGES ROW ── */}
-        <div
-          style={{
-            display: "flex",
-            gap: 20,
-            marginBottom: 26,
-            flex: 1,
-          }}
-        >
-          {/* Left stats card */}
+        {/* STATS + SKILLS */}
+        <div style={{ display: "flex", gap: 20, marginBottom: 26, flex: 1 }}>
           <div
             style={{
               width: 220,
@@ -375,13 +366,7 @@ function Certificate({
               </div>
             </div>
 
-            <div
-              style={{
-                height: 1,
-                background: "#E2E8F0",
-                marginBottom: 16,
-              }}
-            />
+            <div style={{ height: 1, background: "#E2E8F0", marginBottom: 16 }} />
 
             <div>
               <div
@@ -410,7 +395,6 @@ function Certificate({
             </div>
           </div>
 
-          {/* Right: Skills */}
           {selectedSkills.length > 0 && (
             <div
               style={{
@@ -466,7 +450,7 @@ function Certificate({
           )}
         </div>
 
-        {/* ── BADGES ROW ── */}
+        {/* BADGES */}
         {badges.length > 0 && (
           <div
             style={{
@@ -490,14 +474,7 @@ function Certificate({
             >
               Badges Earned — {badges.length}
             </div>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "center",
-                gap: 8,
-                flexWrap: "wrap",
-              }}
-            >
+            <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
               {badges.map((b, i) => (
                 <div
                   key={i}
@@ -524,7 +501,7 @@ function Certificate({
           </div>
         )}
 
-        {/* ── CAREER PATHS ROW ── */}
+        {/* CAREER PATHS */}
         {selectedPaths.length > 0 && (
           <div
             style={{
@@ -579,7 +556,7 @@ function Certificate({
           </div>
         )}
 
-        {/* ── FOOTER: SIGNATURES ── */}
+        {/* FOOTER: SIGNATURES */}
         <div
           style={{
             display: "flex",
@@ -590,7 +567,6 @@ function Certificate({
             borderTop: `1px solid ${GOLD_LIGHT}`,
           }}
         >
-          {/* Left signature: Date */}
           <div style={{ flex: 1 }}>
             <div
               style={{
@@ -599,9 +575,7 @@ function Certificate({
                 marginBottom: 8,
               }}
             />
-            <div style={{ fontSize: 15, fontWeight: 700, color: INK }}>
-              {formattedDate}
-            </div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: INK }}>{formattedDate}</div>
             <div
               style={{
                 fontSize: 9,
@@ -616,7 +590,6 @@ function Certificate({
             </div>
           </div>
 
-          {/* Center: Official seal */}
           <div style={{ textAlign: "center", padding: "0 40px" }}>
             <div
               style={{
@@ -638,7 +611,7 @@ function Certificate({
                   position: "absolute",
                   inset: 6,
                   borderRadius: "50%",
-                  border: `1px dashed #FFFFFFAA`,
+                  border: "1px dashed #FFFFFFAA",
                 }}
               />
               <div style={{ fontSize: 34, marginBottom: 2 }}>🏆</div>
@@ -668,7 +641,6 @@ function Certificate({
             </div>
           </div>
 
-          {/* Right signature: Founder or School */}
           <div style={{ flex: 1, textAlign: "right" }}>
             <div
               style={{
@@ -704,7 +676,6 @@ function Certificate({
           </div>
         </div>
 
-        {/* ── FOOTER FOOTNOTE ── */}
         <div
           style={{
             textAlign: "center",
@@ -744,7 +715,6 @@ export default function CareerCertificate() {
   const [userEmail, setUserEmail] = useState(null);
   const certRef = useRef(null);
 
-  // Check eligibility
   const eligible = completedSkills >= REQUIRED_SKILLS && badges.length >= REQUIRED_BADGES;
   const skillsRemaining = Math.max(0, REQUIRED_SKILLS - completedSkills);
   const badgesRemaining = Math.max(0, REQUIRED_BADGES - badges.length);
@@ -764,26 +734,18 @@ export default function CareerCertificate() {
         const achievement = achs?.[0] || null;
         setAchievementRecord(achievement);
 
-        // Completed skills
         const completed = (skills || []).filter(s => s.status === "completed");
         setAvailableSkills(completed.map(s => s.skill_name));
         setSelectedSkills(completed.map(s => s.skill_name));
         setCompletedSkills(completed.length);
 
-        // XP from completed only
-        setTotalXP(
-          completed.reduce((acc, s) => acc + (s.points || 0), 0)
-        );
-
-        // Badges from achievement table
+        setTotalXP(completed.reduce((acc, s) => acc + (s.points || 0), 0));
         setBadges(achievement?.badges || []);
 
-        // Reuse cert ID if already generated, otherwise leave blank
         if (achievement?.certificate_id) {
           setCertId(achievement.certificate_id);
         }
 
-        // Pre-fill name
         if (me.full_name || me.email) {
           setStudentName(me.full_name || me.email.split("@")[0]);
         }
@@ -806,13 +768,11 @@ export default function CareerCertificate() {
     if (!eligible) return;
     await deductCredit();
 
-    // Generate + save cert ID on first generation
     let idToUse = certId;
     if (!idToUse) {
       idToUse = generateCertId();
       setCertId(idToUse);
 
-      // Save to DB
       try {
         if (achievementRecord?.id) {
           await entities.UserAchievement.update(achievementRecord.id, {
@@ -897,7 +857,7 @@ export default function CareerCertificate() {
         icon={Award}
       />
 
-      {/* ── LOCKED STATE ── */}
+      {/* LOCKED STATE */}
       {!eligible && (
         <motion.div
           initial={{ opacity: 0, y: 16 }}
@@ -915,7 +875,6 @@ export default function CareerCertificate() {
           </p>
 
           <div className="grid sm:grid-cols-2 gap-4 max-w-md mx-auto text-left">
-            {/* Skills requirement */}
             <div className="bg-white rounded-xl p-4 border border-amber-200">
               <div className="text-xs font-bold text-amber-700 uppercase tracking-wider mb-2">
                 Verified Skills
@@ -937,7 +896,6 @@ export default function CareerCertificate() {
               )}
             </div>
 
-            {/* Badge requirement */}
             <div className="bg-white rounded-xl p-4 border border-amber-200">
               <div className="text-xs font-bold text-amber-700 uppercase tracking-wider mb-2">
                 Badges Earned
@@ -967,10 +925,9 @@ export default function CareerCertificate() {
         </motion.div>
       )}
 
-      {/* ── ELIGIBLE STATE ── */}
+      {/* ELIGIBLE STATE */}
       {eligible && (
         <>
-          {/* Verified progress summary */}
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
@@ -978,16 +935,13 @@ export default function CareerCertificate() {
           >
             <Shield className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
             <div className="text-sm">
-              <p className="font-bold text-emerald-900">
-                🎉 You're eligible for a certificate!
-              </p>
+              <p className="font-bold text-emerald-900">🎉 You're eligible for a certificate!</p>
               <p className="text-emerald-700 text-xs mt-1">
                 {completedSkills} verified skills • {badges.length} badge{badges.length !== 1 ? "s" : ""} • {totalXP} XP earned
               </p>
             </div>
           </motion.div>
 
-          {/* Form */}
           <div className="bg-card border border-border rounded-xl p-6 space-y-5">
             <div className="grid sm:grid-cols-2 gap-4">
               <div>
@@ -1024,9 +978,6 @@ export default function CareerCertificate() {
                 placeholder="e.g., Delhi Public School"
                 className="w-full mt-1.5 bg-secondary rounded-lg px-3.5 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
               />
-              <p className="text-[11px] text-muted-foreground mt-1">
-                If provided, this will appear on the certificate as the mentor/school.
-              </p>
             </div>
 
             {availableSkills.length > 0 && (
@@ -1085,7 +1036,6 @@ export default function CareerCertificate() {
             </button>
           </div>
 
-          {/* Certificate preview */}
           {showCert && (
             <motion.div
               initial={{ opacity: 0, y: 16 }}
@@ -1112,24 +1062,19 @@ export default function CareerCertificate() {
                 </div>
               </div>
 
-              {/* Responsive container — prevents cutoff on mobile */}
               <div className="w-full overflow-x-auto rounded-xl border border-border shadow-lg bg-[#FFFDF7]">
-                <div style={{ minWidth: 1200, width: "100%", display: "flex", justifyContent: "center" }}>
-                  <div style={{ transform: "scale(var(--cert-scale, 1))", transformOrigin: "top left" }}>
-                    <Certificate
-                      certRef={certRef}
-                      studentName={studentName}
-                      formattedDate={formattedDate}
-                      schoolName={schoolName}
-                      selectedSkills={selectedSkills}
-                      selectedPaths={selectedPaths}
-                      badges={badges}
-                      certId={certId}
-                      totalXP={totalXP}
-                      completedSkills={completedSkills}
-                    />
-                  </div>
-                </div>
+                <Certificate
+                  certRef={certRef}
+                  studentName={studentName}
+                  formattedDate={formattedDate}
+                  schoolName={schoolName}
+                  selectedSkills={selectedSkills}
+                  selectedPaths={selectedPaths}
+                  badges={badges}
+                  certId={certId}
+                  totalXP={totalXP}
+                  completedSkills={completedSkills}
+                />
               </div>
 
               <p className="text-xs text-center text-muted-foreground">
