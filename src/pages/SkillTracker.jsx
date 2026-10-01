@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Brain, Plus, CheckCircle2, Loader2, Star, X, BookOpen, Trophy, ChevronRight } from "lucide-react";
+import { Brain, Plus, CheckCircle2, Loader2, Star, X, BookOpen, Trophy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useCredits } from "@/hooks/useCredits";
 import FeatureGate from "../components/FeatureGate";
@@ -50,7 +50,6 @@ export default function SkillTracker() {
   const [quizAnswers, setQuizAnswers] = useState({});
   const [quizResult, setQuizResult] = useState(null);
   const [loadingQuiz, setLoadingQuiz] = useState(false);
-  const [grading, setGrading] = useState(false);
 
   const addLockRef = useRef(false);
 
@@ -59,7 +58,6 @@ export default function SkillTracker() {
       if (!me?.email) return;
       entities.UserSkill.filter({ created_by: me.email }).then(data => {
         setSkills(data || []);
-        // XP = only sum of COMPLETED skills
         setTotalPoints(
           (data || [])
             .filter(s => s.status === "completed")
@@ -90,7 +88,6 @@ export default function SkillTracker() {
 
     setError(null);
     try {
-      // NOTE: points = 0 on add. XP is only awarded on completion.
       const created = await entities.UserSkill.create({
         skill_name: trimmed,
         status: "learning",
@@ -122,43 +119,65 @@ export default function SkillTracker() {
     }
   };
 
+  // ── Courses: FIXED prompt + retry ──
   const fetchCourses = async (skill, idx) => {
-    // Toggle open/close
     if (courses[skill.skill_name] || markdownCourses[skill.skill_name]) {
       setOpenCourses(prev => ({ ...prev, [skill.skill_name]: !prev[skill.skill_name] }));
       return;
     }
 
     setOpenCourses(prev => ({ ...prev, [skill.skill_name]: true }));
-
-    // Don't deduct credits for courses view — it's free
     setLoadingIdx(idx);
     setError(null);
+
+    const prompt = `List 5 real online courses and YouTube channels that TEACH "${skill.skill_name}" from scratch to a complete beginner.
+
+CRITICAL RULES:
+- DO NOT explain what the skill is.
+- DO NOT describe careers or jobs that use this skill.
+- ONLY list LEARNING RESOURCES (courses, books, YouTube channels, tutorials).
+- Use REAL names of courses/channels that exist.
+
+Examples for "Python":
+- "Python for Everybody" by University of Michigan (Coursera)
+- "CS50P: Introduction to Programming with Python" (edX, free)
+- "Corey Schafer Python Tutorials" (YouTube)
+- "Automate the Boring Stuff with Python" (free online book)
+- "Real Python" (website tutorials)
+
+Now do the same for "${skill.skill_name}". Return exactly 5 resources.
+
+Return JSON:
+{
+  "courses": [
+    { "title": "Name of course/channel", "platform": "Coursera / YouTube / edX / etc", "duration": "hours or weeks", "free": true, "url_hint": "what it covers" }
+  ],
+  "unlocked_paths": ["Career 1", "Career 2", "Career 3"]
+}
+
+Return ONLY valid JSON. Start with { and end with }. No markdown, no code fences.`;
+
     try {
-      const prompt = `For the skill "${skill.skill_name}", suggest 5 micro-courses and free online resources for a high school or college student. Include YouTube channels, free platforms (Coursera, edX, Khan Academy etc), and projects they can build.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const response = await invokeLLM({ prompt, query: prompt });
+        const parsed = parseAIResponse(response);
 
-Return a JSON object with:
-- courses (array of: title, platform, duration, free, url_hint)
-- unlocked_paths (array of strings)
-
-IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
-
-      const response = await invokeLLM({ prompt, query: prompt });
-      const parsed = parseAIResponse(response);
-
-      if (parsed.type === 'json' && parsed.data) {
-        setCourses(prev => ({
-          ...prev,
-          [skill.skill_name]: {
-            courses: extractArray(parsed.data, ['courses']),
-            unlocked_paths: parsed.data.unlocked_paths || [],
-          },
-        }));
-      } else if (parsed.type === 'markdown') {
-        setMarkdownCourses(prev => ({ ...prev, [skill.skill_name]: parsed.raw }));
-      } else {
-        setError('No courses found. Please try again.');
+        if (parsed.type === 'json' && parsed.data) {
+          const courseList = extractArray(parsed.data, ['courses']);
+          if (courseList.length > 0) {
+            setCourses(prev => ({
+              ...prev,
+              [skill.skill_name]: {
+                courses: courseList,
+                unlocked_paths: parsed.data.unlocked_paths || [],
+              },
+            }));
+            setLoadingIdx(null);
+            return;
+          }
+        }
       }
+      setError('Could not fetch courses. Please try again.');
     } catch (err) {
       console.error('[SkillTracker] Fetch courses error:', err);
       setError('Failed to fetch courses. Please try again.');
@@ -167,7 +186,7 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and
     }
   };
 
-  // ── Quiz flow ──
+  // ── Quiz: SIMPLER prompt (only MCQs) + retry ──
   const startQuiz = async (skill) => {
     const spent = await deductCredit();
     if (!spent) {
@@ -182,43 +201,50 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and
     setQuizAnswers({});
     setQuizResult(null);
 
-    try {
-      const prompt = `You are generating a REAL test of skill for "${skill.skill_name}". 5 questions. Be challenging — this determines if the student has actually learned the skill.
+    const prompt = `Generate 5 multiple-choice questions to test if a student has learned the basics of "${skill.skill_name}".
 
-Mix question types:
-- 3 multiple choice (4 options each, one correct)
-- 1 short answer (expects 1-2 sentences of real understanding)
-- 1 practical application (asks them to write a small code snippet, formula, or apply the skill to a real scenario)
+Each question MUST have:
+- question (string)
+- options (array of exactly 4 strings)
+- correct_index (0, 1, 2, or 3 — the index of the correct option)
+- explanation (string — brief reason)
 
-Return JSON with:
-- questions (array of 5 objects)
-  - For multiple choice: { type: "mcq", question, options: [4 strings], correct_index: 0-3 }
-  - For short answer: { type: "short", question, expected_topics: [array of key concepts] }
-  - For practical: { type: "practical", question, expected_topics: [array of key concepts] }
+Return a JSON object:
+{
+  "questions": [
+    {
+      "question": "What does X do?",
+      "options": ["Option A", "Option B", "Option C", "Option D"],
+      "correct_index": 0,
+      "explanation": "Because..."
+    }
+  ]
+}
 
 RULES:
-- Questions must be SPECIFIC to "${skill.skill_name}", not generic
-- Beginner-to-intermediate level
-- MCQ options must be plausible (no obvious giveaway)
-- For short/practical, "expected_topics" lists what a correct answer should cover
+- ALL 5 questions must be multiple-choice with 4 options
+- Beginner to intermediate difficulty
+- Specific to "${skill.skill_name}" — no generic questions
+- Only ONE correct answer per question
 
-Return ONLY valid JSON. Start with { and end with }. No markdown.`;
+Return ONLY valid JSON. Start with { and end with }. No markdown, no code fences.`;
 
-      const response = await invokeLLM({ prompt, query: prompt });
-      const parsed = parseAIResponse(response);
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const response = await invokeLLM({ prompt, query: prompt });
+        const parsed = parseAIResponse(response);
 
-      if (parsed.type === 'json' && parsed.data) {
-        const questions = extractArray(parsed.data, ['questions']);
-        if (questions.length > 0) {
-          setQuizQuestions(questions);
-        } else {
-          setError('Could not generate quiz. Please try again.');
-          setQuizSkill(null);
+        if (parsed.type === 'json' && parsed.data) {
+          const questions = extractArray(parsed.data, ['questions']);
+          if (questions.length >= 3) {
+            setQuizQuestions(questions);
+            setLoadingQuiz(false);
+            return;
+          }
         }
-      } else {
-        setError('Could not generate quiz. Please try again.');
-        setQuizSkill(null);
       }
+      setError('Could not generate quiz. Please try again.');
+      setQuizSkill(null);
     } catch (err) {
       console.error('[SkillTracker] Quiz generation error:', err);
       setError('Failed to generate quiz. Please try again.');
@@ -228,87 +254,25 @@ Return ONLY valid JSON. Start with { and end with }. No markdown.`;
     }
   };
 
+  // ── Grading: simple (all MCQ) ──
   const submitQuiz = async () => {
     if (!quizSkill || quizQuestions.length === 0) return;
 
-    // Check all answered
-    const allAnswered = quizQuestions.every((q, i) => {
-      if (q.type === 'mcq') return quizAnswers[i] !== undefined;
-      return (quizAnswers[i] || '').trim().length > 10;
-    });
-
+    const allAnswered = quizQuestions.every((q, i) => quizAnswers[i] !== undefined);
     if (!allAnswered) {
-      setError('Please answer all questions (with real answers for text ones).');
+      setError('Please answer all questions.');
       return;
     }
 
-    setGrading(true);
-    setError(null);
-
-    // Grade MCQs locally
-    let mcqCorrect = 0;
-    let mcqTotal = 0;
-    const mcqResults = [];
-    const textQuestions = [];
-    const textAnswers = [];
-
+    let correct = 0;
     quizQuestions.forEach((q, i) => {
-      if (q.type === 'mcq') {
-        mcqTotal++;
-        const correct = quizAnswers[i] === q.correct_index;
-        if (correct) mcqCorrect++;
-        mcqResults.push({ qIdx: i, correct });
-      } else {
-        textQuestions.push({ qIdx: i, question: q.question, expected: q.expected_topics || [] });
-        textAnswers.push(quizAnswers[i]);
-      }
+      if (quizAnswers[i] === q.correct_index) correct++;
     });
 
-    // Grade text answers via AI
-    let textCorrect = 0;
-    const textResults = [];
+    const total = quizQuestions.length;
+    const passed = correct >= Math.ceil(total * 0.8);
 
-    if (textQuestions.length > 0) {
-      try {
-        const gradingPrompt = `You are grading a student's quiz answers for the skill "${quizSkill.skill_name}".
-
-For each question, decide if the student's answer demonstrates genuine understanding. Be STRICT — surface-level answers get 0.
-
-${textQuestions.map((tq, idx) => `
-Question ${idx + 1}: ${tq.question}
-Expected topics: ${tq.expected.join(', ')}
-Student answer: ${textAnswers[idx]}
-`).join('\n')}
-
-Return JSON:
-- results (array of { correct: boolean, reason: string })
-
-RULES:
-- correct = true ONLY if the student clearly demonstrates understanding
-- Mentioning 1-2 keywords without explanation = false
-- Return ONLY valid JSON. Start with { and end with }.`;
-
-        const gradeRes = await invokeLLM({ prompt: gradingPrompt, query: gradingPrompt });
-        const gradeParsed = parseAIResponse(gradeRes);
-
-        if (gradeParsed.type === 'json' && gradeParsed.data) {
-          const results = extractArray(gradeParsed.data, ['results']);
-          results.forEach((r, idx) => {
-            textResults.push({ qIdx: textQuestions[idx].qIdx, correct: !!r.correct });
-            if (r.correct) textCorrect++;
-          });
-        }
-      } catch (err) {
-        console.error('[SkillTracker] Grading error:', err);
-      }
-    }
-
-    const totalCorrect = mcqCorrect + textCorrect;
-    const totalQuestions = quizQuestions.length;
-    const passed = totalCorrect >= Math.ceil(totalQuestions * 0.8); // 80%
-
-    setGrading(false);
-    setQuizResult({ passed, correct: totalCorrect, total: totalQuestions });
+    setQuizResult({ passed, correct, total });
 
     if (passed) {
       try {
@@ -358,7 +322,6 @@ RULES:
         </div>
       )}
 
-      {/* Level card */}
       <div className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-2xl p-5">
         <div className="flex items-center justify-between mb-2">
           <div>
@@ -384,7 +347,6 @@ RULES:
         )}
       </div>
 
-      {/* Add skill */}
       <div className="bg-card border border-border rounded-xl p-4 space-y-3">
         <div className="flex gap-2">
           <input
@@ -417,7 +379,6 @@ RULES:
         </div>
       </div>
 
-      {/* Skill list */}
       <div className="space-y-3">
         {skills.length === 0 && (
           <p className="text-center text-muted-foreground text-sm py-10">
@@ -483,7 +444,6 @@ RULES:
                   </div>
                 </div>
 
-                {/* Courses panel */}
                 <AnimatePresence>
                   {showCourses && (courses[skill.skill_name] || markdownCourses[skill.skill_name]) && (
                     <motion.div
@@ -536,7 +496,6 @@ RULES:
         </AnimatePresence>
       </div>
 
-      {/* Quiz modal */}
       <AnimatePresence>
         {quizSkill && (
           <motion.div
@@ -554,7 +513,7 @@ RULES:
               <div className="flex items-center justify-between p-5 border-b border-border sticky top-0 bg-card z-10">
                 <div>
                   <p className="text-[11px] text-muted-foreground uppercase tracking-widest">
-                    {quizResult ? "Result" : loadingQuiz || grading ? "Working..." : "Skill Verification"}
+                    {quizResult ? "Result" : loadingQuiz ? "Working..." : "Skill Verification"}
                   </p>
                   <p className="font-heading font-bold">{quizSkill.skill_name}</p>
                 </div>
@@ -564,16 +523,14 @@ RULES:
               </div>
 
               <div className="p-5 space-y-4">
-                {(loadingQuiz || grading) && (
+                {loadingQuiz && (
                   <div className="flex flex-col items-center justify-center py-10">
                     <Loader2 className="h-8 w-8 animate-spin text-primary mb-3" />
-                    <p className="text-sm text-muted-foreground">
-                      {grading ? "Grading your answers..." : "Generating your quiz..."}
-                    </p>
+                    <p className="text-sm text-muted-foreground">Generating your quiz...</p>
                   </div>
                 )}
 
-                {!loadingQuiz && !grading && quizResult && (
+                {!loadingQuiz && quizResult && (
                   <div className="text-center space-y-4">
                     <div className={`h-16 w-16 mx-auto rounded-full flex items-center justify-center ${quizResult.passed ? "bg-green-100" : "bg-red-100"}`}>
                       {quizResult.passed ? (
@@ -618,46 +575,31 @@ RULES:
                   </div>
                 )}
 
-                {!loadingQuiz && !grading && !quizResult && quizQuestions.length > 0 && (
+                {!loadingQuiz && !quizResult && quizQuestions.length > 0 && (
                   <>
                     {quizQuestions.map((q, qIdx) => (
                       <div key={qIdx} className="space-y-2 pb-3 border-b border-border last:border-b-0">
                         <p className="font-semibold text-sm">
                           {qIdx + 1}. {q.question}
                         </p>
-
-                        {q.type === 'mcq' && (
-                          <div className="space-y-1.5">
-                            {(q.options || []).map((opt, oIdx) => {
-                              const selected = quizAnswers[qIdx] === oIdx;
-                              return (
-                                <button
-                                  key={oIdx}
-                                  onClick={() => setQuizAnswers(prev => ({ ...prev, [qIdx]: oIdx }))}
-                                  className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-all border ${
-                                    selected
-                                      ? "bg-primary/10 border-primary text-primary font-medium"
-                                      : "border-border hover:border-primary/40"
-                                  }`}
-                                >
-                                  {opt}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        )}
-
-                        {(q.type === 'short' || q.type === 'practical') && (
-                          <textarea
-                            value={quizAnswers[qIdx] || ''}
-                            onChange={e => setQuizAnswers(prev => ({ ...prev, [qIdx]: e.target.value }))}
-                            placeholder={q.type === 'practical'
-                              ? "Write your practical answer / code / application here..."
-                              : "Write your short answer here..."}
-                            rows={q.type === 'practical' ? 5 : 3}
-                            className="w-full bg-secondary rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none"
-                          />
-                        )}
+                        <div className="space-y-1.5">
+                          {(q.options || []).map((opt, oIdx) => {
+                            const selected = quizAnswers[qIdx] === oIdx;
+                            return (
+                              <button
+                                key={oIdx}
+                                onClick={() => setQuizAnswers(prev => ({ ...prev, [qIdx]: oIdx }))}
+                                className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-all border ${
+                                  selected
+                                    ? "bg-primary/10 border-primary text-primary font-medium"
+                                    : "border-border hover:border-primary/40"
+                                }`}
+                              >
+                                {opt}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
                     ))}
 
@@ -666,7 +608,7 @@ RULES:
                       className="w-full bg-primary text-primary-foreground py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2"
                     >
                       <CheckCircle2 className="h-4 w-4" />
-                      Submit & Grade
+                      Submit Answers
                     </button>
                   </>
                 )}
