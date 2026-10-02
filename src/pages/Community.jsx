@@ -5,6 +5,7 @@ import { useCredits } from "@/hooks/useCredits";
 import FeatureGate from "../components/FeatureGate";
 import { entities } from "@/api/entities";
 import { invokeLLM } from "@/api/llm";
+import { supabase } from "@/api/supabaseClient";
 import SectionHeader from "../components/SectionHeader";
 import ReactMarkdown from "react-markdown";
 import { motion } from "framer-motion";
@@ -77,6 +78,31 @@ Structure your answer:
       const updated = await entities.MentorPost.update(created.id, { ai_answer: aiRes });
       setPosts(prev => [updated, ...prev]);
       setQuestion("");
+
+      // ── Fire-and-forget spam check (background) ──
+      (async () => {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (!session?.access_token) return;
+          await fetch(
+            `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/moderate-content`,
+            {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${session.access_token}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                postId: created.id,
+                table: 'mentor_post',
+                text: question.trim(),
+              }),
+            }
+          );
+        } catch (modErr) {
+          console.error('[Community] Moderation check failed:', modErr);
+        }
+      })();
 
     } catch (err) {
       console.error('[Community] Submit error:', err);
