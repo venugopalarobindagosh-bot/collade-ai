@@ -63,7 +63,6 @@ export default function AdminPanel() {
     if (!confirm(`Delete this post permanently?\n\n"${post.question.slice(0, 100)}..."`)) return;
     setActionLoading(`post-${post.id}`);
     try {
-      // Delete replies first (foreign key)
       await supabase.from("post_reply").delete().eq("post_id", post.id);
       const { error } = await supabase.from("mentor_post").delete().eq("id", post.id);
       if (error) throw error;
@@ -118,10 +117,16 @@ export default function AdminPanel() {
     }
   };
 
-  const filteredPosts = posts.filter(p =>
-    !search || p.question?.toLowerCase().includes(search.toLowerCase()) ||
-    p.author_name?.toLowerCase().includes(search.toLowerCase())
-  );
+  // Flagged posts (auto-moderated by AI)
+  const flaggedPosts = posts.filter(p => p.auto_flagged);
+
+  // Visible posts (hide flagged ones from main list)
+  const filteredPosts = posts
+    .filter(p => !p.auto_flagged)
+    .filter(p =>
+      !search || p.question?.toLowerCase().includes(search.toLowerCase()) ||
+      p.author_name?.toLowerCase().includes(search.toLowerCase())
+    );
 
   if (loading) {
     return (
@@ -161,10 +166,14 @@ export default function AdminPanel() {
       )}
 
       {/* Stats */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-3 gap-4">
         <div className="bg-card border border-border rounded-xl p-4">
           <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Posts</p>
           <p className="font-heading text-2xl font-bold mt-1">{posts.length}</p>
+        </div>
+        <div className="bg-card border border-border rounded-xl p-4">
+          <p className="text-xs text-muted-foreground uppercase tracking-wider">Auto-Flagged</p>
+          <p className="font-heading text-2xl font-bold mt-1 text-destructive">{flaggedPosts.length}</p>
         </div>
         <div className="bg-card border border-border rounded-xl p-4">
           <p className="text-xs text-muted-foreground uppercase tracking-wider">Banned Users</p>
@@ -182,6 +191,48 @@ export default function AdminPanel() {
           className="w-full bg-card border border-border rounded-xl pl-10 pr-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
         />
       </div>
+
+      {/* AUTO-FLAGGED POSTS — Step 5 */}
+      {flaggedPosts.length > 0 && (
+        <div className="bg-destructive/5 border-2 border-destructive/30 rounded-xl p-4">
+          <p className="text-xs font-semibold text-destructive uppercase tracking-wider mb-3 flex items-center gap-2">
+            🚨 Auto-Flagged Posts ({flaggedPosts.length})
+          </p>
+          <div className="space-y-2">
+            {flaggedPosts.map((post) => (
+              <div key={post.id} className="bg-white rounded-lg p-3 flex items-start justify-between gap-3 border border-destructive/20">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-mono text-destructive font-semibold">
+                    {post.flag_reason || "Flagged by AI"}
+                  </p>
+                  <p className="text-sm mt-1">{post.question}</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    by {post.author_name || "Anonymous"} • {new Date(post.created_at).toLocaleString()}
+                  </p>
+                </div>
+                <div className="flex flex-col gap-1.5 shrink-0">
+                  <button
+                    onClick={() => deletePost(post)}
+                    disabled={actionLoading === `post-${post.id}`}
+                    className="text-xs px-2.5 py-1 rounded bg-destructive/10 text-destructive hover:bg-destructive/20 font-medium"
+                  >
+                    {actionLoading === `post-${post.id}` ? "..." : "Delete"}
+                  </button>
+                  {post.user_id && (
+                    <button
+                      onClick={() => banUser(post)}
+                      disabled={actionLoading === `ban-${post.user_id}`}
+                      className="text-xs px-2.5 py-1 rounded bg-secondary hover:bg-secondary/70 font-medium"
+                    >
+                      {actionLoading === `ban-${post.user_id}` ? "..." : "Ban"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Banned users list */}
       {banned.length > 0 && (
@@ -212,7 +263,7 @@ export default function AdminPanel() {
         </div>
       )}
 
-      {/* Posts list */}
+      {/* Posts list (no flagged ones) */}
       <div className="space-y-3">
         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
           All Posts ({filteredPosts.length})
