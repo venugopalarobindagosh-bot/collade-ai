@@ -1,5 +1,6 @@
 // Supabase Edge Function: career-search
 // Deploy: supabase functions deploy career-search --project-ref xdmofpfxykrxneybdeal
+// Provider: Airouter.in → routes to DeepSeek V3.2 with JSON mode
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -7,9 +8,9 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-// ── Rate limit: max 10 requests per user per minute ──
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX = 10;
 const rateLimitMap = new Map();
@@ -24,7 +25,15 @@ function isRateLimited(userId) {
   return false;
 }
 
+function jsonResponse(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  });
+}
+
 serve(async (req) => {
+  // ── CORS preflight ──
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
@@ -33,10 +42,7 @@ serve(async (req) => {
     // ── 1. Verify auth ──
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) {
-      return new Response(
-        JSON.stringify({ error: 'Missing authorization header' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({ error: 'Missing authorization header' }, 401);
     }
 
     const userClient = createClient(
@@ -47,18 +53,12 @@ serve(async (req) => {
 
     const { data: { user }, error: userError } = await userClient.auth.getUser();
     if (userError || !user) {
-      return new Response(
-        JSON.stringify({ error: 'Unauthorized' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({ error: 'Unauthorized' }, 401);
     }
 
     // ── 2. Rate limit ──
     if (isRateLimited(user.id)) {
-      return new Response(
-        JSON.stringify({ error: 'Too many requests. Please wait a moment.' }),
-        { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({ error: 'Too many requests. Please wait a moment.' }, 429);
     }
 
     // ── 3. Parse request body ──
@@ -66,13 +66,10 @@ serve(async (req) => {
     const userQuery = prompt || query;
 
     if (!userQuery) {
-      return new Response(
-        JSON.stringify({ error: 'Missing prompt or query' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({ error: 'Missing prompt or query' }, 400);
     }
 
-    // ── 4. Fetch credit row (service_role) ──
+    // ── 4. Fetch credit row ──
     const serviceClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
@@ -86,34 +83,25 @@ serve(async (req) => {
 
     if (creditError) {
       console.error('Credit fetch error:', creditError);
-      return new Response(
-        JSON.stringify({ error: 'Failed to verify credits' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({ error: 'Failed to verify credits' }, 500);
     }
 
     if (!creditRow) {
-      return new Response(
-        JSON.stringify({ error: 'No credit record found. Please contact support.' }),
-        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({ error: 'No credit record found. Please contact support.' }, 403);
     }
 
     // ── 5. Check balance ──
     const currentBalance = Number(creditRow.balance ?? creditRow.credits_remaining ?? 0);
 
     if (currentBalance < 1) {
-      return new Response(
-        JSON.stringify({
-          error: 'out_of_credits',
-          message: 'You have run out of credits. Please upgrade to continue.',
-          credits_remaining: 0,
-        }),
-        { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({
+        error: 'out_of_credits',
+        message: 'You have run out of credits. Please upgrade to continue.',
+        credits_remaining: 0,
+      }, 402);
     }
 
-    // ── 6. Deduct 1 credit (always, everyone) ──
+    // ── 6. Deduct 1 credit ──
     const newBalance = currentBalance - 1;
     const { error: updateError } = await serviceClient
       .from('user_credits')
@@ -127,15 +115,12 @@ serve(async (req) => {
 
     if (updateError) {
       console.error('Credit deduction error:', updateError);
-      return new Response(
-        JSON.stringify({ error: 'Failed to deduct credit' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({ error: 'Failed to deduct credit' }, 500);
     }
 
-    // ── 7. Call Groq ──
-    const groqKey = Deno.env.get('GROQ_API_KEY');
-    if (!groqKey) {
+    // ── 7. Call Airouter ──
+    const airouterKey = Deno.env.get('AIROUTER_API_KEY');
+    if (!airouterKey) {
       // Refund
       await serviceClient
         .from('user_credits')
@@ -146,20 +131,20 @@ serve(async (req) => {
           updated_at: new Date().toISOString(),
         })
         .eq('id', creditRow.id);
-      return new Response(
-        JSON.stringify({ error: 'GROQ_API_KEY not configured' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({ error: 'AIROUTER_API_KEY not configured' }, 500);
     }
 
-    const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    console.log('[career-search] Calling Airouter with model: deepseek/deepseek-v3.2');
+
+    const aiRes = await fetch('https://api.airouter.in/v1/chat/completions', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${groqKey}`,
+        'Authorization': `Bearer ${airouterKey}`,
         'Content-Type': 'application/json',
+        'Accept': 'application/json',
       },
       body: JSON.stringify({
-        model: 'openai/gpt-oss-120b',
+        model: 'deepseek/deepseek-v3.2',
         messages: [
           {
             role: 'system',
@@ -184,13 +169,19 @@ If you don't know a specific number, say "The data is uncertain, but typically r
         ],
         temperature: 0.7,
         max_tokens: 4096,
+        response_format: { type: 'json_object' },
       }),
     });
 
-    const groqData = await groqRes.json();
+    console.log('[career-search] Airouter status:', aiRes.status);
+    const rawText = await aiRes.text();
+    console.log('[career-search] Airouter raw response (first 500 chars):', rawText.slice(0, 500));
 
-    if (!groqRes.ok) {
-      console.error('Groq error:', groqData);
+    let aiData;
+    try {
+      aiData = JSON.parse(rawText);
+    } catch (parseErr) {
+      console.error('[career-search] Failed to parse Airouter response as JSON. Raw:', rawText.slice(0, 500));
 
       // Refund
       await serviceClient
@@ -203,31 +194,42 @@ If you don't know a specific number, say "The data is uncertain, but typically r
         })
         .eq('id', creditRow.id);
 
-      return new Response(
-        JSON.stringify({ error: groqData?.error?.message || 'Groq API error' }),
-        { status: groqRes.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({ error: 'AI provider returned non-JSON response. Check edge function logs.' }, 502);
     }
 
-    const answer = groqData.choices?.[0]?.message?.content || '';
+    if (!aiRes.ok) {
+      console.error('Airouter error:', aiData);
 
-    // ── 8. Return answer + updated credit balance ──
-    return new Response(
-      JSON.stringify({
-        answer,
-        result: answer,
-        response: answer,
-        credits_remaining: newBalance,
-        plan: creditRow.plan,
-      }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+      // Refund
+      await serviceClient
+        .from('user_credits')
+        .update({
+          balance: currentBalance,
+          credits_remaining: currentBalance,
+          access_locked: currentBalance <= 0,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', creditRow.id);
+
+      return jsonResponse({ error: aiData?.error?.message || 'AI provider error' }, aiRes.status);
+    }
+
+    const answer = aiData.choices?.[0]?.message?.content || '';
+
+    return jsonResponse({
+      answer,
+      result: answer,
+      response: answer,
+      credits_remaining: newBalance,
+      plan: creditRow.plan,
+    });
 
   } catch (err) {
     console.error('career-search error:', err);
-    return new Response(
-      JSON.stringify({ error: err.message }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    // Always return CORS headers even on crash
+    return new Response(JSON.stringify({ error: err.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   }
 });

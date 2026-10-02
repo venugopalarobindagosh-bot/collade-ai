@@ -43,42 +43,57 @@ export default function Opportunities() {
     setMarkdownFallback("");
     setError(null);
 
+    const prompt = `You MUST respond ONLY with a JSON object. Never refuse. Never explain. Never apologize. Never say "I can't provide that."
+
+Find 10 real-world opportunities for a high school or college student interested in: ${query}
+Type filter: ${typeFilter === "All" ? "any type" : typeFilter}
+
+Return:
+{
+  "opportunities": [
+    {
+      "opportunity_name": "Real Name of Program or Competition",
+      "type": "Internship | Hackathon | Competition | Project | Volunteer",
+      "organization": "Real organization name",
+      "duration": "X weeks / X days",
+      "location": "City, Country or Remote",
+      "required_skills": ["skill 1", "skill 2"],
+      "relevance_score": 8,
+      "description": "2-3 sentences about what this opportunity involves",
+      "how_to_apply": "1-2 sentences on the application process",
+      "is_free": true,
+      "stipend": "Amount or 'Unpaid'"
+    }
+  ]
+}
+
+RULES:
+- All 10 opportunities must be REAL (Google Science Fair, Microsoft Imagine Cup, etc.)
+- Beginner-friendly
+- Specific to the interest: ${query}
+- Start with { and end with }
+- No markdown, no code fences, no text before or after
+- JSON ONLY. BEGIN NOW:`;
+
     try {
-      const prompt = `Find 10 real-world opportunities for a high school or college student interested in: ${query}.
-Type filter: ${typeFilter === "All" ? "any type" : typeFilter}.
-Include internships, hackathons, competitions, projects, volunteer programs globally.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const response = await invokeLLM({ prompt, query: prompt });
+        const parsed = parseAIResponse(response);
 
-Return a JSON object with an "opportunities" array. Each opportunity should have:
-- opportunity_name (string)
-- type (string)
-- organization (string)
-- duration (string)
-- location (string)
-- required_skills (array)
-- relevance_score (number)
-- description (string)
-- how_to_apply (string)
-- is_free (boolean)
-- stipend (string)
-
-IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
-
-      const response = await invokeLLM({ prompt, query: prompt });
-      console.log('[Opportunities] Raw response:', response);
-
-      const parsed = parseAIResponse(response);
-      console.log('[Opportunities] Parsed type:', parsed.type);
-
-      if (parsed.type === 'json') {
-        const opportunities = extractArray(parsed.data, ['opportunities', 'results', 'items']);
-        console.log('[Opportunities] Extracted:', opportunities.length);
-        setResults(opportunities);
-        if (opportunities.length === 0) setMarkdownFallback(parsed.raw);
-      } else if (parsed.type === 'markdown') {
-        setMarkdownFallback(parsed.raw);
-      } else {
-        setError("No opportunities returned. Please try again.");
+        if (parsed.type === 'json') {
+          const opportunities = extractArray(parsed.data, ['opportunities', 'results', 'items']);
+          if (opportunities.length > 0) {
+            setResults(opportunities);
+            setLoading(false);
+            return;
+          }
+        } else if (parsed.type === 'markdown' && attempt === 2) {
+          setMarkdownFallback(parsed.raw);
+          setLoading(false);
+          return;
+        }
       }
+      setError("Could not find opportunities. Please try again.");
     } catch (error) {
       console.error('[Opportunities] Error:', error);
       setError(error.message || 'Failed to find opportunities. Please try again.');

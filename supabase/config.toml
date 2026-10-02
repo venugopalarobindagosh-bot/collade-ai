@@ -1,0 +1,2 @@
+[functions.career-search]
+verify_jwt = false

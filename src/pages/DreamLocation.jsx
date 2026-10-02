@@ -47,47 +47,63 @@ export default function DreamLocation() {
     setError(null);
     setSelectedLocation(loc);
 
+    const prompt = `You MUST respond ONLY with a JSON object. Never refuse. Never explain. Never apologize. Never say "I can't provide that."
+
+For the location "${loc}", return:
+{
+  "location_name": "${loc}",
+  "overview": "3-4 sentences about studying and working in this location",
+  "top_universities": ["Uni 1", "Uni 2", "Uni 3", "Uni 4", "Uni 5"],
+  "visa_info": "1-2 sentences on student visa / work permit options",
+  "cost_of_living": "Monthly cost range for a student",
+  "avg_graduate_salary": "Starting salary range for fresh graduates",
+  "careers": [
+    {
+      "name": "Career 1",
+      "stream": "Field",
+      "level": "Undergraduate",
+      "duration": "4 years",
+      "short_description": "2-3 sentences about this career in this location",
+      "salary_range": "₹X-₹Y LPA or $X-$Y",
+      "ai_impact": "Medium",
+      "growth": "High",
+      "locations": ["${loc}"]
+    }
+  ]
+}
+
+RULES:
+- careers must have exactly 8 entries
+- Use REAL universities and REAL salary numbers
+- Start with { and end with }
+- No markdown, no code fences, no text before or after
+- JSON ONLY. BEGIN NOW:`;
+
     try {
-      console.log("[DreamLocation] Fetching for:", loc);
+      // Retry up to 3 times
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const response = await invokeLLM({ prompt, query: prompt });
+        const parsed = parseAIResponse(response);
 
-      const prompt = `For the location "${loc}", provide a comprehensive career and education guide.
-
-Return a JSON object with:
-- location_name (string)
-- overview (string)
-- top_universities (array of strings)
-- visa_info (string)
-- cost_of_living (string)
-- avg_graduate_salary (string)
-- careers (array of objects with: name, stream, level, duration, short_description, salary_range, ai_impact, growth, locations)
-
-IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
-
-      const response = await invokeLLM({ prompt, query: prompt });
-      console.log("[DreamLocation] Raw response:", response);
-
-      const parsed = parseAIResponse(response);
-      console.log("[DreamLocation] Parsed type:", parsed.type);
-
-      if (parsed.type === 'json' && parsed.data) {
-        const d = parsed.data;
-        setResults({
-          location_name: d.location_name || loc,
-          overview: d.overview || "",
-          top_universities: d.top_universities || [],
-          visa_info: d.visa_info || "",
-          cost_of_living: d.cost_of_living || "",
-          avg_graduate_salary: d.avg_graduate_salary || "",
-          careers: d.careers || [],
-        });
-      } else if (parsed.type === 'markdown') {
-        setMarkdownFallback(parsed.raw);
-      } else {
-        setError("No location data returned. Please try again.");
+        if (parsed.type === 'json' && parsed.data) {
+          const d = parsed.data;
+          setResults({
+            location_name: d.location_name || loc,
+            overview: d.overview || "",
+            top_universities: d.top_universities || [],
+            visa_info: d.visa_info || "",
+            cost_of_living: d.cost_of_living || "",
+            avg_graduate_salary: d.avg_graduate_salary || "",
+            careers: d.careers || [],
+          });
+          setLoading(false);
+          return;
+        }
       }
-    } catch (error) {
-      console.error("[DreamLocation] Error:", error);
-      setError(error.message || "Failed to fetch location data. Please try again.");
+      setError("Could not fetch location info. Please try again.");
+    } catch (err) {
+      console.error("[DreamLocation] Error:", err);
+      setError(err.message || "Failed to fetch location data.");
     } finally {
       setLoading(false);
     }
@@ -185,7 +201,9 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Top Universities</p>
                 <div className="flex flex-wrap gap-1.5">
                   {results.top_universities.map((uni, i) => (
-                    <span key={i} className="text-xs bg-primary/10 text-primary px-2.5 py-1 rounded-md font-medium">{uni}</span>
+                    <span key={i} className="text-xs bg-primary/10 text-primary px-2.5 py-1 rounded-md font-medium">
+                      {uni}
+                    </span>
                   ))}
                 </div>
               </div>

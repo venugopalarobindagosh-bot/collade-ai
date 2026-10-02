@@ -24,6 +24,7 @@ import PersonalityQuiz from './pages/PersonalityQuiz';
 import Achievements from './pages/Achievements';
 import CounselorReport from './pages/CounselorReport';
 import CareerCertificate from './pages/CareerCertificate';
+import AdminPanel from './pages/AdminPanel';
 import SuccessStarter from './pages/SuccessStarter';
 import SuccessPro from './pages/SuccessPro';
 import SuccessUnlimited from './pages/SuccessUnlimited';
@@ -107,6 +108,7 @@ const AppRoutes = () => {
           <Route path="/achievements" element={<PageTransition><Achievements /></PageTransition>} />
           <Route path="/counselor-report" element={<PageTransition><CounselorReport /></PageTransition>} />
           <Route path="/certificate" element={<PageTransition><CareerCertificate /></PageTransition>} />
+          <Route path="/admin" element={<PageTransition><AdminPanel /></PageTransition>} />
           <Route path="*" element={<PageNotFound />} />
         </Route>
       </Routes>
