@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { useCredits } from "@/hooks/useCredits";
 import { MessageCircle, X, Send, Loader2, Sparkles } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { invokeLLM } from "@/api/llm";
+import { invokeLLMStream } from "@/api/llm";
 import ReactMarkdown from "react-markdown";
 
 export default function ChatBot({ onUpgrade }) {
@@ -32,6 +32,7 @@ export default function ChatBot({ onUpgrade }) {
   const sendMessage = async () => {
     if (!input.trim() || loading) return;
     if (_loaded && !hasCredits) { onUpgrade?.(); return; }
+
     const userMsg = input.trim();
     setInput("");
     setMessages((prev) => [...prev, { role: "user", content: userMsg }]);
@@ -40,24 +41,65 @@ export default function ChatBot({ onUpgrade }) {
     try {
       const spent = await deductCredit();
       if (!spent) { setLoading(false); onUpgrade?.(); return; }
+
       const conversationHistory = messages.slice(-6).map(m => `${m.role}: ${m.content}`).join("\n");
 
-      const response = await invokeLLM({
-        prompt: `You are Collade AI — a friendly, knowledgeable career guidance chatbot for high school students and young adults. You know everything about degrees, courses, diplomas, certifications, universities, careers, salaries, entrance exams, skills, AI impact, future trends, and locations worldwide.\n\nBe conversational, encouraging, teen-friendly, and provide detailed but digestible answers. Use emojis sparingly. Format with markdown for readability.\n\nPrevious conversation:\n${conversationHistory}\n\nUser's question: ${userMsg}\n\nProvide a helpful, comprehensive, and accurate answer.`,
-      });
+      const prompt = `You are Collade AI — a friendly, knowledgeable career guidance chatbot for high school students and young adults. You know everything about degrees, courses, diplomas, certifications, universities, careers, salaries, entrance exams, skills, AI impact, future trends, and locations worldwide.
 
-      setMessages((prev) => [...prev, { role: "assistant", content: typeof response === "string" ? response : String(response) }]);
+Be conversational, encouraging, teen-friendly. Use emojis sparingly. Format with markdown for readability.
+
+Previous conversation:
+${conversationHistory}
+
+User's question: ${userMsg}
+
+Provide a helpful, comprehensive, and accurate answer. Keep it under 250 words. Use markdown headings (##), bullets, and bold for key terms.`;
+
+      // Add placeholder assistant message that we'll stream into
+      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
+      let fullAnswer = "";
+      await invokeLLMStream({
+        prompt,
+        onToken: (text) => {
+          fullAnswer += text;
+          setMessages((prev) => {
+            const updated = [...prev];
+            updated[updated.length - 1] = { role: "assistant", content: fullAnswer };
+            return updated;
+          });
+        },
+        onDone: (finalText) => {
+          const answerText = finalText || fullAnswer;
+          setMessages((prev) => {
+            const updated = [...prev];
+            updated[updated.length - 1] = { role: "assistant", content: answerText };
+            return updated;
+          });
+          setLoading(false);
+        },
+        onError: (e) => {
+          console.error("ChatBot error:", e?.message || e);
+          setMessages((prev) => {
+            const updated = [...prev];
+            updated[updated.length - 1] = {
+              role: "assistant",
+              content: `Sorry, I couldn't get a response. ${e?.message || "Please try again."}`,
+            };
+            return updated;
+          });
+          setLoading(false);
+        },
+      });
     } catch (e) {
-      console.error("ChatBot error:", e?.message || e);
-      setMessages((prev) => [...prev, { role: "assistant", content: `Sorry, I couldn't get a response. Error: ${e?.message || "Unknown error"}. Please try again!` }]);
-    } finally {
+      console.error("ChatBot catch error:", e?.message || e);
+      setMessages((prev) => [...prev, { role: "assistant", content: `Sorry, something went wrong. ${e?.message || ""}` }]);
       setLoading(false);
     }
   };
 
   return (
     <>
-      {/* Floating button */}
       <AnimatePresence>
         {!open && (
           <motion.button
@@ -72,7 +114,6 @@ export default function ChatBot({ onUpgrade }) {
         )}
       </AnimatePresence>
 
-      {/* Chat panel */}
       <AnimatePresence>
         {open && (
           <motion.div
@@ -81,7 +122,6 @@ export default function ChatBot({ onUpgrade }) {
             exit={{ opacity: 0, y: 20, scale: 0.95 }}
             className="fixed bottom-4 right-4 z-50 w-[360px] sm:w-[400px] h-[520px] bg-card rounded-2xl border border-border shadow-2xl flex flex-col overflow-hidden"
           >
-            {/* Header */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-gradient-to-r from-primary/5 to-accent/5">
               <div className="flex items-center gap-2">
                 <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center">
@@ -97,57 +137,44 @@ export default function ChatBot({ onUpgrade }) {
               </button>
             </div>
 
-            {/* Messages */}
             <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
               {messages.map((msg, i) => (
                 <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                  <div
-                    className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
-                      msg.role === "user"
-                        ? "bg-primary text-primary-foreground rounded-br-md"
-                        : "bg-secondary text-secondary-foreground rounded-bl-md"
-                    }`}
-                  >
+                  <div className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed ${
+                    msg.role === "user"
+                      ? "bg-primary text-primary-foreground rounded-br-md"
+                      : "bg-secondary text-secondary-foreground rounded-bl-md"
+                  }`}>
                     {msg.role === "assistant" ? (
-                      <ReactMarkdown className="prose prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 prose-p:my-1 prose-ul:my-1 prose-li:my-0.5 prose-headings:my-1.5">
-                        {msg.content}
-                      </ReactMarkdown>
+                      msg.content ? (
+                        <ReactMarkdown className="prose prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 prose-p:my-1 prose-ul:my-1 prose-li:my-0.5 prose-headings:my-1.5">
+                          {msg.content}
+                        </ReactMarkdown>
+                      ) : (
+                        <div className="flex gap-1.5">
+                          <div className="h-2 w-2 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: "0ms" }} />
+                          <div className="h-2 w-2 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: "150ms" }} />
+                          <div className="h-2 w-2 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: "300ms" }} />
+                        </div>
+                      )
                     ) : (
                       <p>{msg.content}</p>
                     )}
                   </div>
                 </div>
               ))}
-              {loading && (
-                <div className="flex justify-start">
-                  <div className="bg-secondary rounded-2xl rounded-bl-md px-4 py-3">
-                    <div className="flex gap-1.5">
-                      <div className="h-2 w-2 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: "0ms" }} />
-                      <div className="h-2 w-2 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: "150ms" }} />
-                      <div className="h-2 w-2 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: "300ms" }} />
-                    </div>
-                  </div>
-                </div>
-              )}
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Input */}
             <div className="px-3 py-3 border-t border-border">
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  sendMessage();
-                }}
-                className="flex items-center gap-2"
-              >
+              <form onSubmit={(e) => { e.preventDefault(); sendMessage(); }} className="flex items-center gap-2">
                 <input
                   ref={inputRef}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  disabled={!hasCredits}
+                  disabled={!hasCredits || loading}
                   placeholder={hasCredits ? "Ask about any career, degree, or skill..." : "Upgrade to send messages"}
-                  className="flex-1 bg-secondary rounded-xl px-3.5 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  className="flex-1 bg-secondary rounded-xl px-3.5 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
                 />
                 <button
                   type="submit"
