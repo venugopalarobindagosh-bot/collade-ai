@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { MapPin, Search, Globe, Loader2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
-import { invokeLLMStreamArray, invokeLLMStream } from "@/api/llm";
+import { invokeLLMStream } from "@/api/llm";
 import { useCredits } from "@/hooks/useCredits";
-import { parseAIResponse, extractArray } from "@/lib/aiResponseHandler";
+import { parseAIResponse } from "@/lib/aiResponseHandler";
 import FeatureGate from "../components/FeatureGate";
 import SectionHeader from "../components/SectionHeader";
 import CareerCard from "../components/CareerCard";
@@ -30,6 +30,114 @@ const THINKING_STAGES = [
   '🎓 Finding top universities...',
   '💼 Computing career opportunities...',
 ];
+
+/**
+ * Repair common AI JSON typos:
+ * - Missing opening quote: `"duration": 4 years"` → `"duration": "4 years"`
+ * - Trailing commas: `{...,}` → `{...}`
+ * - Unquoted values
+ */
+function repairAIJSON(text) {
+  if (!text || typeof text !== 'string') return null;
+
+  try {
+    // Extract JSON object (from first { to last })
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start === -1 || end === -1 || end < start) return null;
+
+    let fixed = text.slice(start, end + 1);
+
+    // Fix 1: Missing opening quote before unquoted value that ends with quote
+    // Pattern: `"key": 4 years"` → `"key": "4 years"`
+    fixed = fixed.replace(
+      /"(\w+)":\s*([0-9][^",}\]]*)"(\s*[,}\]])/g,
+      '"$1": "$2"$3'
+    );
+
+    // Fix 2: Trailing commas
+    fixed = fixed.replace(/,(\s*[}\]])/g, '$1');
+
+    // Try parse
+    try {
+      const parsed = JSON.parse(fixed);
+      console.log('[DreamLocation] JSON repaired successfully');
+      return parsed;
+    } catch (e) {
+      console.warn('[DreamLocation] Repair attempt 1 failed:', e.message);
+    }
+
+    // Fix 3: More aggressive — quote any unquoted values after colons
+    fixed = fixed.replace(
+      /"(\w+)":\s*([^"\s\[{][^,\]}]*?)(\s*[,}\]])/g,
+      (match, key, val, end) => {
+        const trimmed = val.trim();
+        // Skip valid numbers/booleans/null
+        if (/^(true|false|null|-?\d+(\.\d+)?)$/.test(trimmed)) return match;
+        return `"${key}": "${trimmed}"${end}`;
+      }
+    );
+
+    try {
+      const parsed = JSON.parse(fixed);
+      console.log('[DreamLocation] JSON repaired successfully (attempt 2)');
+      return parsed;
+    } catch (e) {
+      console.warn('[DreamLocation] Repair attempt 2 failed:', e.message);
+    }
+
+    // Fix 4: Convert broken JSON into markdown instead
+    // Extract careers array roughly and produce readable output
+    return null;
+  } catch (err) {
+    console.error('[DreamLocation] Repair error:', err);
+    return null;
+  }
+}
+
+/**
+ * Convert raw JSON text (when parsing fails) to readable markdown
+ */
+function jsonToMarkdown(text) {
+  if (!text) return '';
+
+  // Extract key fields with regex
+  const overview = text.match(/"overview"\s*:\s*"([^"]+)"/)?.[1] || '';
+  const costOfLiving = text.match(/"cost_of_living"\s*:\s*"([^"]+)"/)?.[1] || '';
+  const salary = text.match(/"avg_graduate_salary"\s*:\s*"([^"]+)"/)?.[1] || '';
+  const visa = text.match(/"visa_info"\s*:\s*"([^"]+)"/)?.[1] || '';
+
+  // Extract universities
+  const uniMatch = text.match(/"top_universities"\s*:\s*\[([^\]]+)\]/);
+  const universities = uniMatch
+    ? uniMatch[1].split(',').map(u => u.trim().replace(/^"|"$/g, '')).filter(Boolean)
+    : [];
+
+  // Extract careers — find each {"name": ...} block
+  const careers = [];
+  const careerPattern = /\{\s*"name"\s*:\s*"([^"]+)"[\s\S]*?"salary_range"\s*:\s*"([^"]+)"[\s\S]*?\}/g;
+  let match;
+  while ((match = careerPattern.exec(text)) !== null) {
+    careers.push({ name: match[1], salary: match[2] });
+  }
+
+  let md = '';
+  if (overview) md += `${overview}\n\n`;
+  if (costOfLiving) md += `**Cost of Living:** ${costOfLiving}\n\n`;
+  if (salary) md += `**Avg Graduate Salary:** ${salary}\n\n`;
+  if (visa) md += `**Visa Info:** ${visa}\n\n`;
+  if (universities.length > 0) {
+    md += `## Top Universities\n`;
+    universities.forEach(u => { md += `- ${u}\n`; });
+    md += '\n';
+  }
+  if (careers.length > 0) {
+    md += `## Career Opportunities\n`;
+    careers.forEach(c => { md += `- **${c.name}** — ${c.salary}\n`; });
+  }
+
+  return md || text.slice(0, 2000); // fallback: show raw
+}
 
 export default function DreamLocation() {
   const { deductCredit } = useCredits();
@@ -88,36 +196,41 @@ For the location "${loc}", return:
   ]
 }
 
-RULES:
+CRITICAL RULES:
 - careers must have exactly 8 entries
 - Use REAL universities and REAL salary numbers
+- Every string value MUST be wrapped in double quotes
+- Every key MUST be wrapped in double quotes
 - Start with { and end with }
 - No markdown, no code fences
 - JSON ONLY. BEGIN NOW:`;
 
-    try {
-      // First stream the array items (careers)
-      const careersFound = [];
-      let locationMeta = null;
-      let fullJson = "";
+    let fullJson = "";
 
+    try {
       await invokeLLMStream({
         prompt,
         onToken: (text) => {
           fullJson += text;
-
-          // Try to extract metadata from partial JSON
-          if (!locationMeta) {
-            const overviewMatch = fullJson.match(/"overview"\s*:\s*"([^"]+)"/);
-            if (overviewMatch) {
-              locationMeta = { ...(locationMeta || {}), overview: overviewMatch[1] };
-            }
-          }
         },
         onDone: (finalText) => {
+          clearInterval(thinkingTimer);
           const jsonText = finalText || fullJson;
-          const parsed = parseAIResponse(jsonText);
+          console.log('[DreamLocation] Full response length:', jsonText.length);
 
+          // Step 1: Try the standard parser
+          let parsed = parseAIResponse(jsonText);
+
+          // Step 2: If parse failed, try repair
+          if (parsed.type !== 'json' || !parsed.data) {
+            console.log('[DreamLocation] Standard parse failed, trying repair...');
+            const repaired = repairAIJSON(jsonText);
+            if (repaired) {
+              parsed = { type: 'json', data: repaired, raw: jsonText, isEmpty: false };
+            }
+          }
+
+          // Step 3: Handle the result
           if (parsed.type === 'json' && parsed.data) {
             const d = parsed.data;
             setResults({
@@ -129,25 +242,25 @@ RULES:
               avg_graduate_salary: d.avg_graduate_salary || "",
               careers: d.careers || [],
             });
-          } else if (parsed.type === 'markdown') {
-            setMarkdownFallback(parsed.raw);
           } else {
-            setError("Could not fetch location info. Please try again.");
+            // Step 4: Last resort — convert to markdown
+            console.log('[DreamLocation] Using markdown fallback');
+            setMarkdownFallback(jsonToMarkdown(jsonText));
           }
           setLoading(false);
         },
         onError: (err) => {
+          clearInterval(thinkingTimer);
           console.error("[DreamLocation] Error:", err);
           setError(err.message || "Failed to fetch location data.");
           setLoading(false);
         },
       });
     } catch (err) {
+      clearInterval(thinkingTimer);
       console.error("[DreamLocation] Catch error:", err);
       setError(err.message || "Failed to fetch location data.");
       setLoading(false);
-    } finally {
-      clearInterval(thinkingTimer);
     }
   };
 
