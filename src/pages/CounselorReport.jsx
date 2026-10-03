@@ -6,7 +6,6 @@ import FeatureGate from "../components/FeatureGate";
 import { getCurrentUser } from "@/lib/auth";
 import { entities } from "@/api/entities";
 import { invokeLLMStream } from "@/api/llm";
-import { parseAIResponse } from "@/lib/aiResponseHandler";
 import SectionHeader from "../components/SectionHeader";
 import { motion } from "framer-motion";
 import html2canvas from "html2canvas";
@@ -33,13 +32,102 @@ const BADGE_NAMES = {
   "community_star": "Dedicated", "scholar": "Scholar", "polymath": "Polymath", "genius": "Genius",
 };
 
-const THINKING_STAGES = [
-  "📋 Analyzing student profile...",
-  "📊 Reviewing skill progress...",
-  "🎯 Computing career matches...",
-  "💬 Writing counselor notes...",
-  "✨ Finalizing your report...",
-];
+/**
+ * Parse structured markdown into an object with named sections.
+ * Markdown format expected: ## 📋 Section Title \n\n content
+ */
+function parseReportMarkdown(md) {
+  const sections = {
+    student_summary: "",
+    skill_progress_analysis: "",
+    engagement_analysis: "",
+    badge_interpretation: "",
+    recommended_paths: [],
+    strengths_observed: [],
+    development_areas: [],
+    next_steps: [],
+    counselor_notes: "",
+    overall_readiness_score: "Developing",
+    motivational_note: "",
+  };
+
+  if (!md) return sections;
+
+  // Split by ## headings
+  const sectionRegex = /##\s+(?:[\p{Emoji}\s]*)?([^\n]+)\n([\s\S]*?)(?=##\s|$)/gu;
+  let match;
+
+  while ((match = sectionRegex.exec(md)) !== null) {
+    const titleRaw = match[1].trim().toLowerCase();
+    const body = match[2].trim();
+
+    // Match by keywords in the title
+    if (titleRaw.includes("summary")) {
+      sections.student_summary = cleanBody(body);
+    } else if (titleRaw.includes("skill") && titleRaw.includes("progress") || titleRaw.includes("development analysis")) {
+      sections.skill_progress_analysis = cleanBody(body);
+    } else if (titleRaw.includes("engagement") || titleRaw.includes("commitment")) {
+      sections.engagement_analysis = cleanBody(body);
+    } else if (titleRaw.includes("badge")) {
+      // Body may contain both interpretation text
+      sections.badge_interpretation = cleanBody(body);
+    } else if (titleRaw.includes("recommended") || titleRaw.includes("career path")) {
+      sections.recommended_paths = extractBullets(body);
+    } else if (titleRaw.includes("strength")) {
+      sections.strengths_observed = extractBullets(body);
+    } else if (titleRaw.includes("development area") || titleRaw.includes("areas for")) {
+      sections.development_areas = extractBullets(body);
+    } else if (titleRaw.includes("action plan") || titleRaw.includes("next step")) {
+      sections.next_steps = extractNumbered(body);
+    } else if (titleRaw.includes("counselor note")) {
+      sections.counselor_notes = cleanBody(body);
+    } else if (titleRaw.includes("readiness")) {
+      const m = body.match(/\*\*(Excellent|Strong|Good|Developing)\*\*/i);
+      if (m) sections.overall_readiness_score = m[1];
+      else {
+        const m2 = body.match(/\b(Excellent|Strong|Good|Developing)\b/i);
+        if (m2) sections.overall_readiness_score = m2[1];
+      }
+    } else if (titleRaw.includes("note for") || titleRaw.includes("motivation")) {
+      sections.motivational_note = cleanBody(body);
+    }
+  }
+
+  return sections;
+}
+
+function cleanBody(body) {
+  return body
+    .replace(/\*\*/g, "")
+    .replace(/^[-•]\s*/gm, "")
+    .trim();
+}
+
+function extractBullets(body) {
+  const lines = body.split("\n").filter(l => l.trim());
+  const items = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("-") || trimmed.startsWith("•") || trimmed.startsWith("*")) {
+      items.push(trimmed.replace(/^[-•*]\s*/, "").replace(/\*\*/g, "").trim());
+    }
+  }
+  return items;
+}
+
+function extractNumbered(body) {
+  const lines = body.split("\n").filter(l => l.trim());
+  const items = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const m = trimmed.match(/^\d+[.)]\s*(.+)/);
+    if (m) items.push(m[1].replace(/\*\*/g, "").trim());
+    else if (trimmed.startsWith("-") || trimmed.startsWith("•")) {
+      items.push(trimmed.replace(/^[-•]\s*/, "").replace(/\*\*/g, "").trim());
+    }
+  }
+  return items;
+}
 
 export default function CounselorReport() {
   const { deductCredit } = useCredits();
@@ -48,10 +136,9 @@ export default function CounselorReport() {
   const [studentName, setStudentName] = useState("");
   const [grade, setGrade] = useState("");
   const [report, setReport] = useState(null);
-  const [markdownFallback, setMarkdownFallback] = useState("");
+  const [streamedText, setStreamedText] = useState("");
   const [loading, setLoading] = useState(false);
   const [dataLoading, setDataLoading] = useState(true);
-  const [thinking, setThinking] = useState(THINKING_STAGES[0]);
   const [error, setError] = useState(null);
   const [exporting, setExporting] = useState(false);
   const reportRef = useRef(null);
@@ -82,106 +169,113 @@ export default function CounselorReport() {
 
     setLoading(true);
     setError(null);
-    setMarkdownFallback("");
-    setThinking(THINKING_STAGES[0]);
+    setStreamedText("");
+    setReport(null);
 
     const completedSkills = skills.filter(s => s.status === "completed").map(s => s.skill_name);
     const learningSkills = skills.filter(s => s.status === "learning").map(s => s.skill_name);
     const totalXP = skills.reduce((acc, s) => acc + (s.points || 0), 0);
     const badgeNames = badges.map(b => BADGE_NAMES[b] || b);
+    const firstName = (studentName || "Student").split(" ")[0];
 
-    // Rotate thinking messages
-    let thinkingIndex = 0;
-    const thinkingTimer = setInterval(() => {
-      if (thinkingIndex < THINKING_STAGES.length - 1) {
-        thinkingIndex++;
-        setThinking(THINKING_STAGES[thinkingIndex]);
-      }
-    }, 3000);
+    const prompt = `You are Collade AI, writing a professional student career report for a school counselor or parent.
 
-    const prompt = `Generate a comprehensive, professional student career exploration report for a school counselor or parent.
+STUDENT PROFILE:
+- Name: ${studentName || "Student"}
+- Grade: ${grade || "Not specified"}
+- Completed Skills (quiz-verified): ${completedSkills.join(", ") || "None yet"}
+- Currently Learning: ${learningSkills.join(", ") || "None"}
+- Total XP: ${totalXP}
+- Badges Earned: ${badgeNames.join(", ") || "None yet"}
 
-Student Name: ${studentName || "Student"}
-Grade: ${grade || "Not specified"}
-Completed Skills (verified via quiz): ${completedSkills.join(", ") || "None yet"}
-Currently Learning: ${learningSkills.join(", ") || "None"}
-Total XP Earned: ${totalXP}
-Badges Achieved: ${badgeNames.join(", ") || "None yet"}
+Write the report in MARKDOWN. Use EXACTLY the section headers below — they must match word-for-word so our system can parse them.
 
-This report will be shared with the student's parents and school counselor. Make it thorough, warm, professional, and insightful.
+## 📋 Student Summary
+[3-4 sentences about their journey, referencing specific skills and badges]
 
-Return a JSON object with these EXACT fields:
-- student_summary: 3-4 sentences
-- skill_progress_analysis: 3-4 sentences
-- engagement_analysis: 2-3 sentences
-- recommended_paths: array of 3-5 career paths with reasoning
-- strengths_observed: array of 5-6 strengths
-- development_areas: array of 4-5 areas
-- badge_interpretation: 2-3 sentences
-- next_steps: array of 6-8 specific steps
-- counselor_notes: 3-4 sentences
-- overall_readiness_score: "Excellent" | "Strong" | "Good" | "Developing"
-- motivational_note: 1-2 sentences
+## 📊 Skill Progress Analysis
+[4-5 sentences on their skill choices and learning pattern]
+
+## 🎯 Engagement & Commitment
+[3-4 sentences on consistency, XP earned (${totalXP}), and effort]
+
+## 🏆 Badges Achieved
+[Reference their specific badges: ${badgeNames.join(", ") || "None yet"}. 2-3 sentences on what these reveal about them.]
+
+## 🎯 Recommended Career Paths
+- **[Career 1]** — [1 sentence reasoning tied to their skills]
+- **[Career 2]** — [1 sentence reasoning]
+- **[Career 3]** — [1 sentence reasoning]
+- **[Career 4]** — [1 sentence reasoning]
+
+## ✅ Strengths Observed
+- **[Strength 1]** — [specific evidence]
+- **[Strength 2]**
+- **[Strength 3]**
+- **[Strength 4]**
+- **[Strength 5]**
+
+## 🌱 Development Areas
+- **[Area 1]** — [actionable suggestion]
+- **[Area 2]**
+- **[Area 3]**
+- **[Area 4]**
+
+## 📌 Action Plan
+1. **[First step]**
+2. **[Second step]**
+3. **[Third step]**
+4. **[Fourth step]**
+5. **[Fifth step]**
+6. **[Sixth step]**
+
+## 💬 Counselor Notes
+[3-4 sentences of professional advice for the counselor or parent]
+
+## 🌟 Overall Readiness
+**[Excellent / Strong / Good / Developing]** — [1 sentence rationale]
+
+## 💌 A Note for ${firstName}
+[1-2 sentences directly to the student — warm, personal, encouraging]
 
 RULES:
-- Be specific, not generic
-- Reference actual skills and badges
-- Be encouraging but honest
+- Use REAL numbers and reference ACTUAL skills/badges
+- Be honest but encouraging
 - Use Indian context where relevant
-
-Return ONLY valid JSON. Start with { and end with }.`;
-
-    let accumulatedJson = "";
+- Keep under 800 words
+- NO JSON, NO code blocks, NO extra sections
+- Use EXACTLY the section headers above (our system parses them)`;
 
     try {
+      let buffer = "";
       await invokeLLMStream({
         prompt,
         onToken: (text) => {
-          accumulatedJson += text;
+          buffer += text;
+          setStreamedText(buffer);
         },
-        onDone: (fullText) => {
-          clearInterval(thinkingTimer);
-          const jsonText = fullText || accumulatedJson;
-          const parsed = parseAIResponse(jsonText);
-
-          if (parsed.type === 'json' && parsed.data) {
-            const d = parsed.data;
-            setReport({
-              student_name: studentName || "Student",
-              grade: grade || "Not specified",
-              generated_date: new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
-              skills_xp: totalXP,
-              completed_skills: completedSkills,
-              learning_skills: learningSkills,
-              badges: badgeNames,
-              student_summary: d.student_summary || "",
-              skill_progress_analysis: d.skill_progress_analysis || "",
-              engagement_analysis: d.engagement_analysis || "",
-              recommended_paths: d.recommended_paths || [],
-              strengths_observed: d.strengths_observed || [],
-              development_areas: d.development_areas || [],
-              badge_interpretation: d.badge_interpretation || "",
-              next_steps: d.next_steps || [],
-              counselor_notes: d.counselor_notes || "",
-              overall_readiness_score: d.overall_readiness_score || "Developing",
-              motivational_note: d.motivational_note || "",
-            });
-          } else if (parsed.type === 'markdown') {
-            setMarkdownFallback(parsed.raw);
-          } else {
-            setError("No report generated. Please try again.");
-          }
+        onDone: (finalText) => {
+          const md = finalText || buffer;
+          const parsed = parseReportMarkdown(md);
+          setReport({
+            student_name: studentName || "Student",
+            grade: grade || "Not specified",
+            generated_date: new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+            skills_xp: totalXP,
+            completed_skills: completedSkills,
+            learning_skills: learningSkills,
+            badges: badgeNames,
+            ...parsed,
+          });
           setLoading(false);
         },
         onError: (err) => {
-          clearInterval(thinkingTimer);
           console.error('[CounselorReport] Stream error:', err);
           setError(err.message || 'Failed to generate report. Please try again.');
           setLoading(false);
         },
       });
     } catch (err) {
-      clearInterval(thinkingTimer);
       console.error('[CounselorReport] Catch error:', err);
       setError(err.message || 'Failed to generate report.');
       setLoading(false);
@@ -213,9 +307,7 @@ Return ONLY valid JSON. Start with { and end with }.`;
     }
   };
 
-  const printReport = () => {
-    window.print();
-  };
+  const printReport = () => window.print();
 
   const getScoreColor = (score) => {
     switch (score) {
@@ -286,7 +378,6 @@ Return ONLY valid JSON. Start with { and end with }.`;
                 </div>
               </div>
             )}
-
             {badges.length > 0 && (
               <div className="bg-secondary rounded-lg p-4 space-y-2">
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Badges ({badges.length})</p>
@@ -312,7 +403,6 @@ Return ONLY valid JSON. Start with { and end with }.`;
         </button>
       </div>
 
-      {/* Thinking indicator */}
       {loading && !report && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
@@ -321,7 +411,7 @@ Return ONLY valid JSON. Start with { and end with }.`;
         >
           <div className="flex items-center justify-center gap-2">
             <Loader2 className="h-5 w-5 animate-spin text-primary" />
-            <p className="font-heading font-semibold text-primary">{thinking}</p>
+            <p className="font-heading font-semibold text-primary">📋 Writing your report...</p>
           </div>
         </motion.div>
       )}
@@ -349,6 +439,7 @@ Return ONLY valid JSON. Start with { and end with }.`;
           </div>
 
           <div ref={reportRef} className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-lg">
+            {/* Gradient header */}
             <div className="bg-gradient-to-r from-[#6C47FF] to-[#2ABFBF] p-6 text-white">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex items-center gap-3">
@@ -365,6 +456,7 @@ Return ONLY valid JSON. Start with { and end with }.`;
               </div>
             </div>
 
+            {/* Student header */}
             <div className="p-6 border-b border-slate-100 bg-slate-50/50">
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div>
@@ -381,6 +473,7 @@ Return ONLY valid JSON. Start with { and end with }.`;
               </div>
             </div>
 
+            {/* Stats strip */}
             <div className="grid grid-cols-3 divide-x divide-slate-100 border-b border-slate-100">
               {[
                 { label: "Total XP Earned", value: report.skills_xp, icon: "⭐", color: "text-amber-600" },
@@ -395,6 +488,7 @@ Return ONLY valid JSON. Start with { and end with }.`;
               ))}
             </div>
 
+            {/* Sections */}
             <div className="p-6 space-y-6">
               {report.student_summary && (
                 <section>
@@ -541,21 +635,6 @@ Return ONLY valid JSON. Start with { and end with }.`;
           <p className="text-xs text-center text-muted-foreground">
             Share this report with parents, teachers, or your school counselor. Download as PDF to print or send.
           </p>
-        </motion.div>
-      )}
-
-      {!loading && markdownFallback && !report && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-          <div className="bg-card border border-border rounded-xl p-6 prose prose-invert prose-sm max-w-none
-            prose-headings:text-foreground prose-headings:font-bold
-            prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2
-            prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
-            prose-p:text-muted-foreground prose-p:my-1.5
-            prose-li:text-muted-foreground prose-li:my-0.5
-            prose-strong:text-foreground
-          ">
-            <ReactMarkdown>{markdownFallback}</ReactMarkdown>
-          </div>
         </motion.div>
       )}
     </div>
