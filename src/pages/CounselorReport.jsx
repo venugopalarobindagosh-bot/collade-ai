@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef } from "react";
-import { FileText, Loader2, Download, Printer, Shield, Award, TrendingUp, Target, Brain } from "lucide-react";
+import { FileText, Loader2, Download, Printer } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useCredits } from "@/hooks/useCredits";
 import FeatureGate from "../components/FeatureGate";
 import { getCurrentUser } from "@/lib/auth";
 import { entities } from "@/api/entities";
-import { invokeLLM } from "@/api/llm";
-import { parseAIResponse, extractArray } from "@/lib/aiResponseHandler";
+import { invokeLLMStream } from "@/api/llm";
+import { parseAIResponse } from "@/lib/aiResponseHandler";
 import SectionHeader from "../components/SectionHeader";
 import { motion } from "framer-motion";
 import html2canvas from "html2canvas";
@@ -33,6 +33,14 @@ const BADGE_NAMES = {
   "community_star": "Dedicated", "scholar": "Scholar", "polymath": "Polymath", "genius": "Genius",
 };
 
+const THINKING_STAGES = [
+  "📋 Analyzing student profile...",
+  "📊 Reviewing skill progress...",
+  "🎯 Computing career matches...",
+  "💬 Writing counselor notes...",
+  "✨ Finalizing your report...",
+];
+
 export default function CounselorReport() {
   const { deductCredit } = useCredits();
   const [skills, setSkills] = useState([]);
@@ -43,6 +51,7 @@ export default function CounselorReport() {
   const [markdownFallback, setMarkdownFallback] = useState("");
   const [loading, setLoading] = useState(false);
   const [dataLoading, setDataLoading] = useState(true);
+  const [thinking, setThinking] = useState(THINKING_STAGES[0]);
   const [error, setError] = useState(null);
   const [exporting, setExporting] = useState(false);
   const reportRef = useRef(null);
@@ -56,7 +65,6 @@ export default function CounselorReport() {
       ]).then(([skls, achs]) => {
         setSkills(skls || []);
         setBadges(achs?.[0]?.badges || []);
-        // Auto-fill student name
         if (me.full_name || me.email) {
           setStudentName(me.full_name || me.email.split("@")[0]);
         }
@@ -75,14 +83,23 @@ export default function CounselorReport() {
     setLoading(true);
     setError(null);
     setMarkdownFallback("");
+    setThinking(THINKING_STAGES[0]);
 
     const completedSkills = skills.filter(s => s.status === "completed").map(s => s.skill_name);
     const learningSkills = skills.filter(s => s.status === "learning").map(s => s.skill_name);
     const totalXP = skills.reduce((acc, s) => acc + (s.points || 0), 0);
     const badgeNames = badges.map(b => BADGE_NAMES[b] || b);
 
-    try {
-      const prompt = `Generate a comprehensive, professional student career exploration report for a school counselor or parent.
+    // Rotate thinking messages
+    let thinkingIndex = 0;
+    const thinkingTimer = setInterval(() => {
+      if (thinkingIndex < THINKING_STAGES.length - 1) {
+        thinkingIndex++;
+        setThinking(THINKING_STAGES[thinkingIndex]);
+      }
+    }, 3000);
+
+    const prompt = `Generate a comprehensive, professional student career exploration report for a school counselor or parent.
 
 Student Name: ${studentName || "Student"}
 Grade: ${grade || "Not specified"}
@@ -94,63 +111,79 @@ Badges Achieved: ${badgeNames.join(", ") || "None yet"}
 This report will be shared with the student's parents and school counselor. Make it thorough, warm, professional, and insightful.
 
 Return a JSON object with these EXACT fields:
-- student_summary: 3-4 sentences summarizing the student's journey and progress
-- skill_progress_analysis: 3-4 sentences analyzing their skill development and learning pattern
-- engagement_analysis: 2-3 sentences on their engagement level, consistency, and commitment
-- recommended_paths: array of 3-5 specific career paths suited to their profile (with 1 sentence reasoning each, formatted like "Data Scientist — strong analytical skills and tech interest")
-- strengths_observed: array of 5-6 specific strengths with brief evidence
-- development_areas: array of 4-5 specific areas for improvement with actionable context
-- badge_interpretation: 2-3 sentences explaining what their badges mean about their character and progress
-- next_steps: array of 6-8 specific actionable steps ordered by priority
-- counselor_notes: 3-4 sentences of professional advice for the counselor/parent
-- overall_readiness_score: "Excellent" (85%+), "Strong" (70-84%), "Good" (55-69%), or "Developing" (below 55%) — pick based on their overall progress
-- motivational_note: 1-2 sentences directly to the student, encouraging and personal
+- student_summary: 3-4 sentences
+- skill_progress_analysis: 3-4 sentences
+- engagement_analysis: 2-3 sentences
+- recommended_paths: array of 3-5 career paths with reasoning
+- strengths_observed: array of 5-6 strengths
+- development_areas: array of 4-5 areas
+- badge_interpretation: 2-3 sentences
+- next_steps: array of 6-8 specific steps
+- counselor_notes: 3-4 sentences
+- overall_readiness_score: "Excellent" | "Strong" | "Good" | "Developing"
+- motivational_note: 1-2 sentences
 
 RULES:
 - Be specific, not generic
-- Reference actual skills and badges earned
+- Reference actual skills and badges
 - Be encouraging but honest
-- Avoid vague phrases like "continues to grow"
 - Use Indian context where relevant
 
 Return ONLY valid JSON. Start with { and end with }.`;
 
-      const response = await invokeLLM({ prompt, query: prompt });
-      console.log('[CounselorReport] Raw response:', response);
+    let accumulatedJson = "";
 
-      const parsed = parseAIResponse(response);
+    try {
+      await invokeLLMStream({
+        prompt,
+        onToken: (text) => {
+          accumulatedJson += text;
+        },
+        onDone: (fullText) => {
+          clearInterval(thinkingTimer);
+          const jsonText = fullText || accumulatedJson;
+          const parsed = parseAIResponse(jsonText);
 
-      if (parsed.type === 'json' && parsed.data) {
-        const d = parsed.data;
-        setReport({
-          student_name: studentName || "Student",
-          grade: grade || "Not specified",
-          generated_date: new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
-          skills_xp: totalXP,
-          completed_skills: completedSkills,
-          learning_skills: learningSkills,
-          badges: badgeNames,
-          student_summary: d.student_summary || "",
-          skill_progress_analysis: d.skill_progress_analysis || "",
-          engagement_analysis: d.engagement_analysis || "",
-          recommended_paths: d.recommended_paths || [],
-          strengths_observed: d.strengths_observed || [],
-          development_areas: d.development_areas || [],
-          badge_interpretation: d.badge_interpretation || "",
-          next_steps: d.next_steps || [],
-          counselor_notes: d.counselor_notes || "",
-          overall_readiness_score: d.overall_readiness_score || "Developing",
-          motivational_note: d.motivational_note || "",
-        });
-      } else if (parsed.type === 'markdown') {
-        setMarkdownFallback(parsed.raw);
-      } else {
-        setError("No report generated. Please try again.");
-      }
+          if (parsed.type === 'json' && parsed.data) {
+            const d = parsed.data;
+            setReport({
+              student_name: studentName || "Student",
+              grade: grade || "Not specified",
+              generated_date: new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+              skills_xp: totalXP,
+              completed_skills: completedSkills,
+              learning_skills: learningSkills,
+              badges: badgeNames,
+              student_summary: d.student_summary || "",
+              skill_progress_analysis: d.skill_progress_analysis || "",
+              engagement_analysis: d.engagement_analysis || "",
+              recommended_paths: d.recommended_paths || [],
+              strengths_observed: d.strengths_observed || [],
+              development_areas: d.development_areas || [],
+              badge_interpretation: d.badge_interpretation || "",
+              next_steps: d.next_steps || [],
+              counselor_notes: d.counselor_notes || "",
+              overall_readiness_score: d.overall_readiness_score || "Developing",
+              motivational_note: d.motivational_note || "",
+            });
+          } else if (parsed.type === 'markdown') {
+            setMarkdownFallback(parsed.raw);
+          } else {
+            setError("No report generated. Please try again.");
+          }
+          setLoading(false);
+        },
+        onError: (err) => {
+          clearInterval(thinkingTimer);
+          console.error('[CounselorReport] Stream error:', err);
+          setError(err.message || 'Failed to generate report. Please try again.');
+          setLoading(false);
+        },
+      });
     } catch (err) {
-      console.error('[CounselorReport] Error:', err);
-      setError(err.message || 'Failed to generate report. Please try again.');
-    } finally {
+      clearInterval(thinkingTimer);
+      console.error('[CounselorReport] Catch error:', err);
+      setError(err.message || 'Failed to generate report.');
       setLoading(false);
     }
   };
@@ -279,9 +312,22 @@ Return ONLY valid JSON. Start with { and end with }.`;
         </button>
       </div>
 
+      {/* Thinking indicator */}
+      {loading && !report && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-2xl p-6 text-center"
+        >
+          <div className="flex items-center justify-center gap-2">
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            <p className="font-heading font-semibold text-primary">{thinking}</p>
+          </div>
+        </motion.div>
+      )}
+
       {report && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
-          {/* Action buttons */}
           <div className="flex items-center justify-between flex-wrap gap-3">
             <p className="text-sm font-semibold">Report Preview</p>
             <div className="flex gap-2">
@@ -302,9 +348,7 @@ Return ONLY valid JSON. Start with { and end with }.`;
             </div>
           </div>
 
-          {/* Report Container */}
           <div ref={reportRef} className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-lg">
-            {/* Report Header */}
             <div className="bg-gradient-to-r from-[#6C47FF] to-[#2ABFBF] p-6 text-white">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex items-center gap-3">
@@ -321,7 +365,6 @@ Return ONLY valid JSON. Start with { and end with }.`;
               </div>
             </div>
 
-            {/* Student header */}
             <div className="p-6 border-b border-slate-100 bg-slate-50/50">
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div>
@@ -338,7 +381,6 @@ Return ONLY valid JSON. Start with { and end with }.`;
               </div>
             </div>
 
-            {/* Stats strip */}
             <div className="grid grid-cols-3 divide-x divide-slate-100 border-b border-slate-100">
               {[
                 { label: "Total XP Earned", value: report.skills_xp, icon: "⭐", color: "text-amber-600" },
@@ -353,9 +395,7 @@ Return ONLY valid JSON. Start with { and end with }.`;
               ))}
             </div>
 
-            {/* Sections */}
             <div className="p-6 space-y-6">
-              {/* Student Summary */}
               {report.student_summary && (
                 <section>
                   <h3 className="font-heading text-base font-bold text-slate-900 mb-2 flex items-center gap-2">
@@ -366,7 +406,6 @@ Return ONLY valid JSON. Start with { and end with }.`;
                 </section>
               )}
 
-              {/* Skill Progress */}
               {report.skill_progress_analysis && (
                 <section>
                   <h3 className="font-heading text-base font-bold text-slate-900 mb-2 flex items-center gap-2">
@@ -377,7 +416,6 @@ Return ONLY valid JSON. Start with { and end with }.`;
                 </section>
               )}
 
-              {/* Engagement */}
               {report.engagement_analysis && (
                 <section>
                   <h3 className="font-heading text-base font-bold text-slate-900 mb-2 flex items-center gap-2">
@@ -388,7 +426,6 @@ Return ONLY valid JSON. Start with { and end with }.`;
                 </section>
               )}
 
-              {/* Badges section */}
               {report.badges.length > 0 && (
                 <section>
                   <h3 className="font-heading text-base font-bold text-slate-900 mb-3 flex items-center gap-2">
@@ -411,7 +448,6 @@ Return ONLY valid JSON. Start with { and end with }.`;
                 </section>
               )}
 
-              {/* Recommended Paths */}
               {report.recommended_paths?.length > 0 && (
                 <section>
                   <h3 className="font-heading text-base font-bold text-slate-900 mb-3 flex items-center gap-2">
@@ -431,13 +467,10 @@ Return ONLY valid JSON. Start with { and end with }.`;
                 </section>
               )}
 
-              {/* Strengths + Development (two columns) */}
               <div className="grid sm:grid-cols-2 gap-5">
                 {report.strengths_observed?.length > 0 && (
                   <section className="bg-green-50/50 border border-green-100 rounded-lg p-4">
-                    <h3 className="font-heading text-sm font-bold text-green-800 mb-3 flex items-center gap-2">
-                      ✅ Strengths Observed
-                    </h3>
+                    <h3 className="font-heading text-sm font-bold text-green-800 mb-3">✅ Strengths Observed</h3>
                     <ul className="space-y-2">
                       {report.strengths_observed.map((s, i) => (
                         <li key={i} className="text-sm text-slate-700 leading-relaxed flex gap-2">
@@ -451,9 +484,7 @@ Return ONLY valid JSON. Start with { and end with }.`;
 
                 {report.development_areas?.length > 0 && (
                   <section className="bg-amber-50/50 border border-amber-100 rounded-lg p-4">
-                    <h3 className="font-heading text-sm font-bold text-amber-800 mb-3 flex items-center gap-2">
-                      🌱 Development Areas
-                    </h3>
+                    <h3 className="font-heading text-sm font-bold text-amber-800 mb-3">🌱 Development Areas</h3>
                     <ul className="space-y-2">
                       {report.development_areas.map((s, i) => (
                         <li key={i} className="text-sm text-slate-700 leading-relaxed flex gap-2">
@@ -466,7 +497,6 @@ Return ONLY valid JSON. Start with { and end with }.`;
                 )}
               </div>
 
-              {/* Next Steps */}
               {report.next_steps?.length > 0 && (
                 <section>
                   <h3 className="font-heading text-base font-bold text-slate-900 mb-3 flex items-center gap-2">
@@ -486,17 +516,13 @@ Return ONLY valid JSON. Start with { and end with }.`;
                 </section>
               )}
 
-              {/* Counselor Notes */}
               {report.counselor_notes && (
                 <section className="bg-blue-50/50 border-l-4 border-blue-400 rounded-r-lg p-4">
-                  <h3 className="font-heading text-sm font-bold text-blue-900 mb-2 flex items-center gap-2">
-                    💬 Counselor Notes
-                  </h3>
+                  <h3 className="font-heading text-sm font-bold text-blue-900 mb-2">💬 Counselor Notes</h3>
                   <p className="text-sm text-slate-700 leading-relaxed italic">{report.counselor_notes}</p>
                 </section>
               )}
 
-              {/* Motivational Note */}
               {report.motivational_note && (
                 <section className="bg-gradient-to-br from-purple-50 to-pink-50 border border-purple-100 rounded-lg p-5 text-center">
                   <p className="text-xs text-purple-700 uppercase tracking-widest font-bold mb-2">A Note for You</p>
@@ -504,13 +530,9 @@ Return ONLY valid JSON. Start with { and end with }.`;
                 </section>
               )}
 
-              {/* Footer */}
               <div className="pt-4 border-t border-slate-100 text-center">
                 <p className="text-xs text-slate-400">
                   Generated by Collade AI Academy • {report.generated_date}
-                </p>
-                <p className="text-[10px] text-slate-300 mt-1">
-                  This report was created using verified skill and badge data from the student's Collade AI profile.
                 </p>
               </div>
             </div>
