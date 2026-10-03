@@ -1,28 +1,8 @@
-import { useState, useEffect } from "react";
-import { ArrowLeft, Clock, DollarSign, Zap, TrendingUp, BookOpen, GraduationCap, Users, Brain, Briefcase, Globe, Star, Loader2 } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { ArrowLeft, Loader2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { invokeLLMStream } from "@/api/llm";
-import { parseAIResponse } from "@/lib/aiResponseHandler";
 import { motion } from "framer-motion";
-
-function safeString(value) {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number') return String(value);
-  if (typeof value === 'object') {
-    if (value.average !== undefined) return value.average;
-    if (value.range !== undefined) return value.range;
-    try { return JSON.stringify(value); } catch { return ''; }
-  }
-  return String(value);
-}
-
-const THINKING_STAGES = [
-  '💭 Gathering career intelligence...',
-  '📊 Computing salary data...',
-  '🎯 Analyzing AI impact...',
-  '✨ Writing your guide...',
-];
 
 export default function CareerDetail() {
   const urlParams = new URLSearchParams(window.location.search);
@@ -30,336 +10,166 @@ export default function CareerDetail() {
   const stream = urlParams.get("stream") || "";
   const level = urlParams.get("level") || "";
 
-  const [detail, setDetail] = useState(null);
-  const [markdownFallback, setMarkdownFallback] = useState("");
+  const [streamedText, setStreamedText] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [thinking, setThinking] = useState(THINKING_STAGES[0]);
+  const scrollRef = useRef(null);
 
   useEffect(() => {
     if (!name) return;
 
-    let accumulatedJson = "";
-    let thinkingIndex = 0;
-    const thinkingTimer = setInterval(() => {
-      if (thinkingIndex < THINKING_STAGES.length - 1) {
-        thinkingIndex++;
-        setThinking(THINKING_STAGES[thinkingIndex]);
-      }
-    }, 2500);
-
     const fetchDetail = async () => {
       setLoading(true);
       setError(null);
+      setStreamedText("");
 
-      try {
-        const prompt = `Give me a hyper-detailed, specific career guide for: "${name}"
+      const prompt = `You are Collade AI, an expert career guide.
+
+Give a hyper-detailed career guide for: "${name}"
 ${stream ? `Stream: ${stream}` : ""}
 ${level ? `Level: ${level}` : ""}
 
-You MUST return a structured JSON object with these EXACT fields. Each field MUST have specific, real data:
+FORMAT YOUR RESPONSE EXACTLY LIKE THIS:
 
-- name, full_title, stream, specialization, level, duration
-- overview: 3-4 sentences describing the career
-- what_you_will_learn (array)
-- required_subjects (array)
-- entrance_exams (array)
-- top_universities_india (array)
-- top_universities_global (array)
-- career_options (array)
-- salary_india, salary_global, salary_entry, salary_mid, salary_senior
-- ai_impact (percentage), ai_impact_detail (2-3 sentences)
-- growth_potential, growth_detail
-- personality_fit, stress_level, work_life_balance
-- skills_needed (array), future_proof_skills (array)
-- popular_locations (array), emerging_specializations (array)
-- related_certifications (array)
-- internship_opportunities (1-2 sentences)
-- online_resources (array)
-- day_in_the_life (3-4 sentences)
-- pros (array), cons (array)
-- quick_summary (1-2 sentences)
+# [Full Career Title]
 
-RULES: NEVER say "varies". ALWAYS use real numbers and specific names.
+[2-3 sentence quick summary — what this career is about]
 
-IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
+## 📋 Overview
+[3-4 sentence overview of what this career involves day-to-day]
 
+## 🎓 Education Path
+- **Required Degree:** [specific degree name] — [duration]
+- **Top Universities (India):** [5 specific universities]
+- **Top Universities (Global):** [5 specific universities]
+- **Entrance Exams:** [specific real exams]
+- **Required Subjects:** [specific subjects]
+
+## 💰 Salary Guide
+- **India (Entry):** ₹X-Y LPA
+- **India (Mid):** ₹X-Y LPA
+- **India (Senior):** ₹X-Y LPA
+- **Global (Entry):** $X-Y USD
+- **Global (Senior):** $X-Y USD
+
+## ⚡ AI Impact
+[2-3 sentences on how AI affects this career + % risk score]
+
+## 📈 Growth & Outlook
+- **5-year outlook:** [specific growth % or qualitative answer]
+- **10-year outlook:** [specific prediction]
+- **Best locations:** [specific cities/countries]
+
+## 🎯 Skills You Need
+- **[Skill 1]** — why + how to learn
+- **[Skill 2]**
+(6-8 skills, mix of technical + soft)
+
+## 💼 Career Options
+- [Specific job title 1]
+- [Specific job title 2]
+(5-6 titles)
+
+## 🌅 A Day in the Life
+[3-4 sentence vivid description of a typical workday]
+
+## ✅ Pros
+- [Specific pro 1]
+- [Specific pro 2]
+(4-5 items)
+
+## ⚠️ Cons
+- [Specific con 1]
+- [Specific con 2]
+(3-4 items)
+
+## 🚀 Next Steps for Students
+1. [Specific action]
+2. [Specific action]
+3. [Specific action]
+
+RULES:
+- Use REAL numbers, REAL universities, REAL company names
+- NEVER say "varies" — give specific ranges
+- Use Indian context where relevant
+- Keep under 800 words
+- Use emojis for sections
+- Bold all key terms
+- NO JSON, NO code blocks`;
+
+      try {
         await invokeLLMStream({
           prompt,
           onToken: (text) => {
-            accumulatedJson += text;
-          },
-          onDone: (fullText) => {
-            const jsonText = fullText || accumulatedJson;
-            const parsed = parseAIResponse(jsonText);
-
-            if (parsed.type === 'json' && parsed.data) {
-              const d = parsed.data;
-              setDetail({
-                name: d.name || name,
-                full_title: d.full_title || name,
-                stream: d.stream || stream || "Various",
-                specialization: d.specialization || "",
-                level: d.level || level || "Varies",
-                duration: d.duration || "4 years",
-                overview: d.overview || "",
-                what_you_will_learn: d.what_you_will_learn || [],
-                required_subjects: d.required_subjects || [],
-                entrance_exams: d.entrance_exams || [],
-                top_universities_india: d.top_universities_india || [],
-                top_universities_global: d.top_universities_global || [],
-                career_options: d.career_options || [],
-                salary_india: d.salary_india || "",
-                salary_global: d.salary_global || "",
-                salary_entry: d.salary_entry || "",
-                salary_mid: d.salary_mid || "",
-                salary_senior: d.salary_senior || "",
-                ai_impact: d.ai_impact || "",
-                ai_impact_detail: d.ai_impact_detail || "",
-                growth_potential: d.growth_potential || "",
-                growth_detail: d.growth_detail || "",
-                personality_fit: d.personality_fit || "",
-                stress_level: d.stress_level || "",
-                work_life_balance: d.work_life_balance || "",
-                skills_needed: d.skills_needed || [],
-                future_proof_skills: d.future_proof_skills || [],
-                popular_locations: d.popular_locations || [],
-                emerging_specializations: d.emerging_specializations || [],
-                related_certifications: d.related_certifications || [],
-                internship_opportunities: d.internship_opportunities || "",
-                online_resources: d.online_resources || [],
-                day_in_the_life: d.day_in_the_life || "",
-                pros: d.pros || [],
-                cons: d.cons || [],
-                quick_summary: d.quick_summary || "",
-              });
-            } else if (parsed.type === 'markdown') {
-              setMarkdownFallback(parsed.raw);
-            } else {
-              setError('No career details found. Please try again.');
+            setStreamedText(prev => prev + text);
+            if (scrollRef.current) {
+              scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
             }
-            setLoading(false);
           },
+          onDone: () => setLoading(false),
           onError: (err) => {
-            console.error('[CareerDetail] Stream error:', err);
+            console.error('[CareerDetail] Error:', err);
             setError(err.message || 'Failed to load career details.');
             setLoading(false);
           },
         });
       } catch (err) {
-        console.error('[CareerDetail] Error:', err);
+        console.error('[CareerDetail] Catch error:', err);
         setError(err.message || 'Failed to load career details.');
         setLoading(false);
       }
     };
 
     fetchDetail();
-    return () => clearInterval(thinkingTimer);
   }, [name, stream, level]);
 
-  if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20 space-y-4">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        <p className="font-heading font-semibold text-primary">{thinking}</p>
-        <p className="text-xs text-muted-foreground">Loading details for {name}...</p>
-      </div>
-    );
-  }
-
-  if (error) return <p className="text-center py-20 text-destructive">{error}</p>;
-
-  if (markdownFallback && !detail) {
-    return (
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-        <button onClick={() => window.history.back()} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="h-4 w-4" /> Back
-        </button>
-        <div className="bg-gradient-to-br from-primary/10 via-accent/5 to-background border border-primary/10 rounded-2xl p-6">
-          <h1 className="font-heading text-2xl sm:text-3xl font-bold">{name}</h1>
-        </div>
-        <div className="bg-card border border-border rounded-xl p-6 prose prose-invert prose-sm max-w-none
-          prose-headings:text-foreground prose-headings:font-bold
-          prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2
-          prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
-          prose-p:text-muted-foreground prose-p:my-1.5
-          prose-li:text-muted-foreground prose-li:my-0.5
-          prose-strong:text-foreground
-        ">
-          <ReactMarkdown>{markdownFallback}</ReactMarkdown>
-        </div>
-      </motion.div>
-    );
-  }
-
-  if (!detail) return <p className="text-center py-20 text-muted-foreground">Career not found</p>;
-
-  const InfoRow = ({ icon: Icon, label, value }) => {
-    const safeValue = safeString(value);
-    if (!safeValue) return null;
-    return (
-      <div className="flex items-start gap-3 py-3 border-b border-border/50">
-        <Icon className="h-4 w-4 text-primary mt-0.5 shrink-0" />
-        <div>
-          <p className="text-xs text-muted-foreground">{label}</p>
-          <p className="text-sm font-medium mt-0.5">{safeValue}</p>
-        </div>
-      </div>
-    );
-  };
-
-  const TagSection = ({ title, items, color = "bg-secondary" }) => {
-    if (!items || items.length === 0) return null;
-    return (
-      <div>
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{title}</p>
-        <div className="flex flex-wrap gap-1.5">
-          {items.map((item, i) => (
-            <span key={i} className={`text-xs ${color} px-2.5 py-1 rounded-md font-medium`}>{safeString(item)}</span>
-          ))}
-        </div>
-      </div>
-    );
-  };
-
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+    <div className="space-y-6 max-w-4xl mx-auto">
       <button onClick={() => window.history.back()} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
         <ArrowLeft className="h-4 w-4" /> Back
       </button>
 
-      <div className="bg-gradient-to-br from-primary/10 via-accent/5 to-background border border-primary/10 rounded-2xl p-6">
-        <div className="flex flex-wrap gap-2 mb-3">
-          {detail.level && <span className="text-xs font-medium bg-primary/10 text-primary px-2.5 py-1 rounded-md">{detail.level}</span>}
-          {detail.stream && <span className="text-xs font-medium bg-secondary px-2.5 py-1 rounded-md">{detail.stream}</span>}
-          {detail.specialization && <span className="text-xs font-medium bg-accent/10 text-accent px-2.5 py-1 rounded-md">{detail.specialization}</span>}
+      {error && (
+        <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4 text-destructive">
+          <p className="text-sm">{error}</p>
         </div>
-        <h1 className="font-heading text-2xl sm:text-3xl font-bold tracking-tight">{detail.full_title || detail.name}</h1>
-        {detail.quick_summary && <p className="text-muted-foreground mt-2 text-sm sm:text-base max-w-2xl">{safeString(detail.quick_summary)}</p>}
-      </div>
+      )}
 
-      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        {[
-          { icon: Clock, label: "Duration", value: detail.duration },
-          { icon: DollarSign, label: "Salary (Entry)", value: detail.salary_entry },
-          { icon: TrendingUp, label: "Growth", value: detail.growth_potential },
-          { icon: Zap, label: "AI Impact", value: detail.ai_impact },
-        ].filter(i => i.value).map((item, i) => (
-          <div key={i} className="bg-card border border-border rounded-xl p-4">
-            <item.icon className="h-4 w-4 text-primary" />
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider mt-2">{item.label}</p>
-            <p className="font-heading font-bold mt-0.5">{safeString(item.value)}</p>
-          </div>
-        ))}
-      </div>
-
-      <div className="grid lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-          {detail.overview && (
-            <div className="bg-card border border-border rounded-xl p-5">
-              <h3 className="font-heading font-bold flex items-center gap-2"><BookOpen className="h-4 w-4 text-primary" /> Overview</h3>
-              <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{safeString(detail.overview)}</p>
-            </div>
-          )}
-
-          {detail.day_in_the_life && (
-            <div className="bg-card border border-border rounded-xl p-5">
-              <h3 className="font-heading font-bold flex items-center gap-2"><Users className="h-4 w-4 text-primary" /> A Day in the Life</h3>
-              <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{safeString(detail.day_in_the_life)}</p>
-            </div>
-          )}
-
-          <TagSection title="What You'll Learn" items={detail.what_you_will_learn} color="bg-primary/10 text-primary" />
-          <TagSection title="Career Options" items={detail.career_options} color="bg-accent/10 text-accent" />
-
-          {(detail.salary_india || detail.salary_global || detail.salary_entry || detail.salary_mid || detail.salary_senior) && (
-            <div className="bg-card border border-border rounded-xl p-5 space-y-3">
-              <h3 className="font-heading font-bold flex items-center gap-2"><DollarSign className="h-4 w-4 text-primary" /> Salary Guide</h3>
-              <InfoRow icon={DollarSign} label="India" value={detail.salary_india} />
-              <InfoRow icon={Globe} label="Global" value={detail.salary_global} />
-              <InfoRow icon={Briefcase} label="Entry Level" value={detail.salary_entry} />
-              <InfoRow icon={TrendingUp} label="Mid Level" value={detail.salary_mid} />
-              <InfoRow icon={Star} label="Senior Level" value={detail.salary_senior} />
-            </div>
-          )}
-
-          {detail.ai_impact_detail && (
-            <div className="bg-card border border-border rounded-xl p-5">
-              <h3 className="font-heading font-bold flex items-center gap-2"><Zap className="h-4 w-4 text-primary" /> AI Impact Analysis</h3>
-              <p className="text-sm text-muted-foreground mt-2">{safeString(detail.ai_impact_detail)}</p>
-            </div>
-          )}
-
-          <div className="grid sm:grid-cols-2 gap-4">
-            {detail.pros?.length > 0 && (
-              <div className="bg-card border border-border rounded-xl p-5">
-                <h3 className="font-heading font-bold text-green-600 text-sm mb-2">✅ Pros</h3>
-                <ul className="space-y-1.5">
-                  {detail.pros.map((p, i) => <li key={i} className="text-sm text-muted-foreground flex items-start gap-2"><span className="text-green-500 mt-1">•</span>{safeString(p)}</li>)}
-                </ul>
-              </div>
-            )}
-            {detail.cons?.length > 0 && (
-              <div className="bg-card border border-border rounded-xl p-5">
-                <h3 className="font-heading font-bold text-red-500 text-sm mb-2">⚠️ Cons</h3>
-                <ul className="space-y-1.5">
-                  {detail.cons.map((c, i) => <li key={i} className="text-sm text-muted-foreground flex items-start gap-2"><span className="text-red-400 mt-1">•</span>{safeString(c)}</li>)}
-                </ul>
-              </div>
-            )}
-          </div>
+      {loading && !streamedText && (
+        <div className="flex flex-col items-center justify-center py-20 space-y-4">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <p className="font-heading font-semibold text-primary">💭 Writing your career guide...</p>
+          <p className="text-xs text-muted-foreground">Loading details for {name}</p>
         </div>
+      )}
 
-        <div className="space-y-4">
-          <div className="bg-card border border-border rounded-xl p-5 space-y-4">
-            <InfoRow icon={Users} label="Personality Fit" value={detail.personality_fit} />
-            <InfoRow icon={Brain} label="Stress Level" value={detail.stress_level} />
-            <InfoRow icon={Clock} label="Work-Life Balance" value={detail.work_life_balance} />
-            <InfoRow icon={Briefcase} label="Internships" value={detail.internship_opportunities} />
+      {streamedText && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="bg-card border border-border rounded-2xl p-6 sm:p-8 max-h-[80vh] overflow-y-auto"
+          ref={scrollRef}
+        >
+          <div className="prose prose-invert prose-sm max-w-none
+            prose-headings:text-foreground prose-headings:font-bold
+            prose-h1:text-2xl prose-h1:mt-0 prose-h1:mb-4 prose-h1:text-primary
+            prose-h2:text-lg prose-h2:mt-6 prose-h2:mb-3 prose-h2:text-primary prose-h2:border-b prose-h2:border-border prose-h2:pb-2
+            prose-h3:text-base prose-h3:mt-4 prose-h3:mb-2
+            prose-p:text-muted-foreground prose-p:my-2 prose-p:leading-relaxed
+            prose-li:text-muted-foreground prose-li:my-1
+            prose-strong:text-foreground prose-strong:font-semibold
+            prose-ul:my-2 prose-ol:my-2
+          ">
+            <ReactMarkdown>{streamedText}</ReactMarkdown>
           </div>
-
-          <TagSection title="Required Subjects" items={detail.required_subjects} />
-          <TagSection title="Entrance Exams" items={detail.entrance_exams} color="bg-destructive/10 text-destructive" />
-          <TagSection title="Skills Needed" items={detail.skills_needed} color="bg-primary/10 text-primary" />
-          <TagSection title="Future-Proof Skills" items={detail.future_proof_skills} color="bg-accent/10 text-accent" />
-          <TagSection title="Emerging Specializations" items={detail.emerging_specializations} />
-          <TagSection title="Related Certifications" items={detail.related_certifications} />
-          <TagSection title="Popular Locations" items={detail.popular_locations} />
-
-          {detail.top_universities_india?.length > 0 && (
-            <div className="bg-card border border-border rounded-xl p-5">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Top Universities (India)</p>
-              <ul className="space-y-1">
-                {detail.top_universities_india.map((u, i) => (
-                  <li key={i} className="text-sm flex items-center gap-2"><GraduationCap className="h-3 w-3 text-primary shrink-0" />{safeString(u)}</li>
-                ))}
-              </ul>
+          {loading && (
+            <div className="flex items-center gap-2 mt-4 pt-4 border-t border-border">
+              <Loader2 className="h-3 w-3 animate-spin text-primary" />
+              <span className="text-xs text-muted-foreground italic">writing...</span>
             </div>
           )}
-
-          {detail.top_universities_global?.length > 0 && (
-            <div className="bg-card border border-border rounded-xl p-5">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Top Universities (Global)</p>
-              <ul className="space-y-1">
-                {detail.top_universities_global.map((u, i) => (
-                  <li key={i} className="text-sm flex items-center gap-2"><Globe className="h-3 w-3 text-accent shrink-0" />{safeString(u)}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {detail.online_resources?.length > 0 && (
-            <div className="bg-card border border-border rounded-xl p-5">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Online Resources</p>
-              <ul className="space-y-1">
-                {detail.online_resources.map((r, i) => (
-                  <li key={i} className="text-sm text-muted-foreground">• {safeString(r)}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-      </div>
-    </motion.div>
+        </motion.div>
+      )}
+    </div>
   );
 }

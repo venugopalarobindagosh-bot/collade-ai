@@ -1,11 +1,9 @@
-import { useState } from "react";
-import { Compass, Search, Loader2, Sparkles } from "lucide-react";
+import { useState, useRef } from "react";
+import { Compass, Search, Loader2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useCredits } from "@/hooks/useCredits";
-import { invokeLLMStreamArray } from "@/api/llm";
-import { parseAIResponse, extractArray } from "@/lib/aiResponseHandler";
+import { invokeLLMStream } from "@/api/llm";
 import SectionHeader from "../components/SectionHeader";
-import CareerCard from "../components/CareerCard";
 import { motion } from "framer-motion";
 
 const TOPICS = [
@@ -46,13 +44,12 @@ const FUN_FACTS = [
 export default function ExploreTopics() {
   const { deductCredit } = useCredits();
   const [selectedTopic, setSelectedTopic] = useState(null);
-  const [results, setResults] = useState([]);
-  const [markdownFallback, setMarkdownFallback] = useState("");
+  const [streamedText, setStreamedText] = useState("");
   const [loading, setLoading] = useState(false);
-  const [thinking, setThinking] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [error, setError] = useState(null);
   const [funFact] = useState(() => FUN_FACTS[Math.floor(Math.random() * FUN_FACTS.length)]);
+  const scrollRef = useRef(null);
 
   const fetchTopic = async (topic) => {
     const spent = await deductCredit();
@@ -62,75 +59,87 @@ export default function ExploreTopics() {
     }
 
     setLoading(true);
-    setResults([]);
-    setMarkdownFallback("");
+    setStreamedText("");
     setError(null);
-    setThinking("💭 Analyzing your topic...");
 
-    const prompt = `For the topic/interest "${topic}", list ALL related degrees, diplomas, certifications, and career paths globally.
+    const prompt = `You are Collade AI, an expert career intelligence assistant.
 
-Include: mainstream programs, niche specializations, emerging fields, professional certifications, online diplomas, and unconventional paths.
+For the topic/interest "${topic}", give a comprehensive career guide in clean MARKDOWN format.
 
-Return 12 diverse options across different education levels.
+FORMAT YOUR RESPONSE EXACTLY LIKE THIS:
 
-Return a JSON object with a "careers" array. Each career should have:
-- name (string)
-- title (string)
-- stream (string)
-- level (string)
-- duration (string)
-- short_description (string)
-- salary_range (string)
-- ai_impact (string: "High", "Medium", or "Low")
-- growth (string)
-- locations (array)
-- skills_needed (array)
+# [Topic Name] — Career Pathways
 
-IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start your response with { and end with }.`;
+[2-3 sentence overview of this field's career landscape]
 
-    let fullJson = "";
+## 🎓 Degrees & Programs
+- **Bachelor's in [specific name]** — X years. Why it works for this field.
+- **Master's in [specific name]** — X years. Advanced specialization.
+- **Diploma/Certification in [specific name]** — X months. Fast-track option.
+- **Professional Certification: [real name like "AWS Certified ML"]** — X months.
+(6-8 options, mix of mainstream + niche)
+
+## 💼 Top Career Paths
+### [Career 1 — e.g., "Machine Learning Engineer"]
+- **Salary (India):** ₹X-Y LPA | **Global:** $X-Y USD
+- **Growth:** High/Medium · **AI Impact:** Low/Medium/High
+[2-3 sentence description — what they actually do]
+
+### [Career 2]
+(same structure)
+
+(repeat for 6-8 careers)
+
+## 🚀 Skills to Build
+- **[Skill 1]** — why it matters + how to start
+- **[Skill 2]**
+(5-6 skills)
+
+## 🌍 Best Locations
+- **India:** [specific cities]
+- **Global:** [specific countries/cities]
+
+## ⚡ Action Steps for Students
+1. [Specific first step]
+2. [Specific second step]
+3. [Specific third step]
+
+RULES:
+- Use REAL names, REAL salaries with actual currency (₹, $), REAL universities/certifications
+- NEVER say "varies" — always give specific numbers or ranges
+- Use Indian context where relevant
+- Keep the whole response under 700 words
+- Use emojis for section headers
+- Bold every key term
+- NO JSON, NO code blocks, NO extra text before # heading`;
 
     try {
-      await invokeLLMStreamArray({
+      await invokeLLMStream({
         prompt,
-        arrayKey: "careers",
-        onThinking: (text) => setThinking(text),
-        onItem: (item) => {
-          setResults(prev => [...prev, item]);
-        },
-        onDone: async () => {
-          // Fallback if no items extracted
-          if (results.length === 0 && fullJson) {
-            const parsed = parseAIResponse(fullJson);
-            if (parsed.type === 'json') {
-              const arr = extractArray(parsed.data, ['careers', 'matches', 'results']);
-              setResults(arr);
-            } else if (parsed.type === 'markdown') {
-              setMarkdownFallback(parsed.raw);
-            }
+        onToken: (text) => {
+          setStreamedText(prev => prev + text);
+          if (scrollRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
           }
-          setThinking("");
-          setLoading(false);
         },
+        onDone: () => setLoading(false),
         onError: (err) => {
           console.error('[ExploreTopics] Error:', err);
           setError(err.message || 'Failed to find careers. Please try again.');
-          setThinking("");
           setLoading(false);
         },
       });
     } catch (err) {
       console.error('[ExploreTopics] Catch error:', err);
       setError(err.message || 'Failed to find careers.');
-      setThinking("");
       setLoading(false);
     }
   };
 
-  const handleSearch = async () => {
+  const handleSearch = () => {
     if (!searchQuery.trim()) return;
     setSelectedTopic(searchQuery.trim());
-    await fetchTopic(searchQuery.trim());
+    fetchTopic(searchQuery.trim());
   };
 
   return (
@@ -182,8 +191,8 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start your respo
         ))}
       </div>
 
-      {/* Thinking indicator */}
-      {loading && results.length === 0 && (
+      {/* Thinking indicator — only when no streamed text yet */}
+      {loading && !streamedText && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -191,7 +200,7 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start your respo
         >
           <div className="flex items-center justify-center gap-2">
             <Loader2 className="h-5 w-5 animate-spin text-primary" />
-            <p className="font-heading font-semibold text-primary">{thinking}</p>
+            <p className="font-heading font-semibold text-primary">💭 Analyzing "{selectedTopic}"...</p>
           </div>
           <div className="bg-white/50 rounded-xl p-4 max-w-md mx-auto">
             <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold mb-1">💡 Fun Fact</p>
@@ -200,48 +209,33 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start your respo
         </motion.div>
       )}
 
-      {/* Results — cards appear one by one as they stream in */}
-      {results.length > 0 && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">
-              <span className="font-semibold text-foreground">{results.length}</span>
-              {loading && <span className="text-primary italic"> (streaming...)</span>}
-              {" "}career paths found for <span className="font-semibold text-foreground">{selectedTopic}</span>
-            </p>
-            {loading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
-          </div>
-          <div className="grid sm:grid-cols-2 gap-3">
-            {results.map((career, i) => (
-              <motion.div
-                key={i}
-                initial={{ opacity: 0, y: 15, scale: 0.95 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                transition={{ duration: 0.3 }}
-              >
-                <CareerCard career={career} index={i} />
-              </motion.div>
-            ))}
-          </div>
-        </motion.div>
-      )}
-
-      {/* Markdown fallback */}
-      {!loading && markdownFallback && results.length === 0 && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            Career paths for <span className="font-semibold text-foreground">{selectedTopic}</span>:
-          </p>
-          <div className="bg-card border border-border rounded-xl p-6 prose prose-invert prose-sm max-w-none
+      {/* Streaming markdown output */}
+      {streamedText && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="bg-card border border-border rounded-2xl p-6 sm:p-8 max-h-[80vh] overflow-y-auto"
+          ref={scrollRef}
+        >
+          <div className="prose prose-invert prose-sm max-w-none
             prose-headings:text-foreground prose-headings:font-bold
-            prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2
-            prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
-            prose-p:text-muted-foreground prose-p:my-1.5
-            prose-li:text-muted-foreground prose-li:my-0.5
-            prose-strong:text-foreground
+            prose-h1:text-2xl prose-h1:mt-0 prose-h1:mb-4 prose-h1:text-primary
+            prose-h2:text-lg prose-h2:mt-6 prose-h2:mb-3 prose-h2:text-primary prose-h2:border-b prose-h2:border-border prose-h2:pb-2
+            prose-h3:text-base prose-h3:mt-4 prose-h3:mb-2 prose-h3:text-foreground
+            prose-p:text-muted-foreground prose-p:my-2 prose-p:leading-relaxed
+            prose-li:text-muted-foreground prose-li:my-1
+            prose-strong:text-foreground prose-strong:font-semibold
+            prose-code:text-primary prose-code:bg-secondary prose-code:px-1 prose-code:rounded
+            prose-ul:my-2 prose-ol:my-2
           ">
-            <ReactMarkdown>{markdownFallback}</ReactMarkdown>
+            <ReactMarkdown>{streamedText}</ReactMarkdown>
           </div>
+          {loading && (
+            <div className="flex items-center gap-2 mt-4 pt-4 border-t border-border">
+              <Loader2 className="h-3 w-3 animate-spin text-primary" />
+              <span className="text-xs text-muted-foreground italic">writing...</span>
+            </div>
+          )}
         </motion.div>
       )}
     </div>
