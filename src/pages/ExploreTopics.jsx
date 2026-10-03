@@ -1,10 +1,11 @@
 import { useState, useRef } from "react";
-import { Compass, Search, Loader2 } from "lucide-react";
+import { Compass, Search, Loader2, ChevronRight } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useCredits } from "@/hooks/useCredits";
 import { invokeLLMStream } from "@/api/llm";
 import SectionHeader from "../components/SectionHeader";
 import { motion } from "framer-motion";
+import { useNavigate } from "react-router-dom";
 
 const TOPICS = [
   { name: "Artificial Intelligence & ML", emoji: "🤖" },
@@ -33,22 +34,15 @@ const TOPICS = [
   { name: "Travel & Hospitality", emoji: "✈️" },
 ];
 
-const FUN_FACTS = [
-  "AI/ML roles grew 40% in 2024 — fastest of any tech field.",
-  "Careers combining tech + creativity are the most AI-resistant.",
-  "Data Science salaries in India grew 22% year-over-year.",
-  "Green tech jobs will reach 24 million worldwide by 2030.",
-  "Healthcare + tech roles have the lowest AI disruption risk.",
-];
-
 export default function ExploreTopics() {
   const { deductCredit } = useCredits();
+  const navigate = useNavigate();
   const [selectedTopic, setSelectedTopic] = useState(null);
   const [streamedText, setStreamedText] = useState("");
+  const [parsedItems, setParsedItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [error, setError] = useState(null);
-  const [funFact] = useState(() => FUN_FACTS[Math.floor(Math.random() * FUN_FACTS.length)]);
   const scrollRef = useRef(null);
 
   const fetchTopic = async (topic) => {
@@ -60,64 +54,45 @@ export default function ExploreTopics() {
 
     setLoading(true);
     setStreamedText("");
+    setParsedItems([]);
     setError(null);
 
     const prompt = `You are Collade AI, an expert career intelligence assistant.
 
-For the topic/interest "${topic}", give a comprehensive career guide in clean MARKDOWN format.
+For the topic/interest "${topic}", list the TOP 8 career paths.
 
-FORMAT YOUR RESPONSE EXACTLY LIKE THIS:
+FORMAT EXACTLY LIKE THIS — use ## for each career:
 
-# [Topic Name] — Career Pathways
+# ${topic} — Career Pathways
 
-[2-3 sentence overview of this field's career landscape]
-
-## 🎓 Degrees & Programs
-- **Bachelor's in [specific name]** — X years. Why it works for this field.
-- **Master's in [specific name]** — X years. Advanced specialization.
-- **Diploma/Certification in [specific name]** — X months. Fast-track option.
-- **Professional Certification: [real name like "AWS Certified ML"]** — X months.
-(6-8 options, mix of mainstream + niche)
-
-## 💼 Top Career Paths
-### [Career 1 — e.g., "Machine Learning Engineer"]
-- **Salary (India):** ₹X-Y LPA | **Global:** $X-Y USD
-- **Growth:** High/Medium · **AI Impact:** Low/Medium/High
+## [Career 1 Name]
+- **Stream:** [specific field]
+- **Duration:** X years · **Level:** Undergraduate/Postgraduate/Certification
+- **Salary:** ₹X-Y LPA (India) | $X-Y USD (Global)
+- **AI Impact:** Low/Medium/High · **Growth:** High/Medium
 [2-3 sentence description — what they actually do]
 
-### [Career 2]
-(same structure)
+## [Career 2 Name]
+(same format)
 
-(repeat for 6-8 careers)
-
-## 🚀 Skills to Build
-- **[Skill 1]** — why it matters + how to start
-- **[Skill 2]**
-(5-6 skills)
-
-## 🌍 Best Locations
-- **India:** [specific cities]
-- **Global:** [specific countries/cities]
-
-## ⚡ Action Steps for Students
-1. [Specific first step]
-2. [Specific second step]
-3. [Specific third step]
+(repeat for 8 careers — mix mainstream + niche + emerging)
 
 RULES:
-- Use REAL names, REAL salaries with actual currency (₹, $), REAL universities/certifications
-- NEVER say "varies" — always give specific numbers or ranges
-- Use Indian context where relevant
-- Keep the whole response under 700 words
-- Use emojis for section headers
-- Bold every key term
+- REAL career titles, REAL salary numbers with currency
+- NEVER say "varies" — give specific ranges
+- Each description: 2-3 sentences max
+- Keep total under 700 words
 - NO JSON, NO code blocks, NO extra text before # heading`;
 
     try {
+      let buffer = "";
       await invokeLLMStream({
         prompt,
         onToken: (text) => {
-          setStreamedText(prev => prev + text);
+          buffer += text;
+          setStreamedText(buffer);
+          const items = extractCareersFromMarkdown(buffer);
+          if (items.length > 0) setParsedItems(items);
           if (scrollRef.current) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
           }
@@ -140,6 +115,10 @@ RULES:
     if (!searchQuery.trim()) return;
     setSelectedTopic(searchQuery.trim());
     fetchTopic(searchQuery.trim());
+  };
+
+  const openCareerDetail = (careerName) => {
+    navigate(`/career-detail?name=${encodeURIComponent(careerName)}&stream=${encodeURIComponent(selectedTopic || "")}`);
   };
 
   return (
@@ -191,53 +170,146 @@ RULES:
         ))}
       </div>
 
-      {/* Thinking indicator — only when no streamed text yet */}
+      {/* Thinking indicator — only before any text arrives */}
       {loading && !streamedText && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-2xl p-6 text-center space-y-3"
+          className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-2xl p-6 text-center"
         >
           <div className="flex items-center justify-center gap-2">
             <Loader2 className="h-5 w-5 animate-spin text-primary" />
             <p className="font-heading font-semibold text-primary">💭 Analyzing "{selectedTopic}"...</p>
           </div>
-          <div className="bg-white/50 rounded-xl p-4 max-w-md mx-auto">
-            <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold mb-1">💡 Fun Fact</p>
-            <p className="text-sm text-foreground">{funFact}</p>
+        </motion.div>
+      )}
+
+      {/* Live streaming markdown — shows while loading regardless of parsed items */}
+      {streamedText && loading && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="bg-card border border-border rounded-2xl p-6 sm:p-8 max-h-[50vh] overflow-y-auto"
+          ref={scrollRef}
+        >
+          <div className="flex items-center gap-2 mb-4 pb-3 border-b border-border">
+            <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+            <span className="text-xs font-semibold text-primary uppercase tracking-wider">AI is writing...</span>
+          </div>
+          <div className="prose prose-invert prose-sm max-w-none
+            prose-headings:text-foreground prose-headings:font-bold
+            prose-h1:text-xl prose-h1:mt-0 prose-h1:mb-3 prose-h1:text-primary
+            prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2 prose-h2:text-foreground
+            prose-p:text-muted-foreground prose-p:my-1.5 prose-p:leading-relaxed
+            prose-li:text-muted-foreground prose-li:my-0.5
+            prose-strong:text-foreground prose-strong:font-semibold
+          ">
+            <ReactMarkdown>{streamedText}</ReactMarkdown>
           </div>
         </motion.div>
       )}
 
-      {/* Streaming markdown output */}
-      {streamedText && (
+      {/* Cards — build up below as items are parsed */}
+      {parsedItems.length > 0 && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">
+              <span className="font-semibold text-foreground">{parsedItems.length}</span>
+              {loading && <span className="text-primary italic"> (streaming...)</span>}
+              {" "}career paths found
+            </p>
+            {loading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
+          </div>
+          <div className="grid sm:grid-cols-2 gap-3">
+            {parsedItems.map((career, i) => (
+              <motion.button
+                key={i}
+                initial={{ opacity: 0, y: 15, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ duration: 0.3, delay: i * 0.03 }}
+                onClick={() => openCareerDetail(career.name)}
+                className="text-left bg-card border border-border rounded-xl p-4 hover:border-primary/50 hover:shadow-md transition-all group"
+              >
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <h3 className="font-heading font-bold text-base group-hover:text-primary transition-colors">{career.name}</h3>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-primary shrink-0 mt-0.5" />
+                </div>
+                <div className="space-y-1.5 text-xs">
+                  {career.duration && (
+                    <p className="text-muted-foreground"><span className="font-medium text-foreground">Duration:</span> {career.duration}</p>
+                  )}
+                  {career.salary && (
+                    <p className="text-muted-foreground"><span className="font-medium text-foreground">Salary:</span> {career.salary}</p>
+                  )}
+                  {career.tags?.length > 0 && (
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {career.tags.map((tag, j) => (
+                        <span key={j} className="text-[10px] bg-secondary px-2 py-0.5 rounded-md font-medium">{tag}</span>
+                      ))}
+                    </div>
+                  )}
+                  {career.description && (
+                    <p className="text-muted-foreground line-clamp-2 pt-1">{career.description}</p>
+                  )}
+                </div>
+              </motion.button>
+            ))}
+          </div>
+        </motion.div>
+      )}
+
+      {/* Markdown fallback — only if loading done AND no cards parsed */}
+      {!loading && streamedText && parsedItems.length === 0 && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          className="bg-card border border-border rounded-2xl p-6 sm:p-8 max-h-[80vh] overflow-y-auto"
-          ref={scrollRef}
+          className="bg-card border border-border rounded-2xl p-6 sm:p-8"
         >
           <div className="prose prose-invert prose-sm max-w-none
             prose-headings:text-foreground prose-headings:font-bold
             prose-h1:text-2xl prose-h1:mt-0 prose-h1:mb-4 prose-h1:text-primary
             prose-h2:text-lg prose-h2:mt-6 prose-h2:mb-3 prose-h2:text-primary prose-h2:border-b prose-h2:border-border prose-h2:pb-2
-            prose-h3:text-base prose-h3:mt-4 prose-h3:mb-2 prose-h3:text-foreground
             prose-p:text-muted-foreground prose-p:my-2 prose-p:leading-relaxed
             prose-li:text-muted-foreground prose-li:my-1
             prose-strong:text-foreground prose-strong:font-semibold
-            prose-code:text-primary prose-code:bg-secondary prose-code:px-1 prose-code:rounded
-            prose-ul:my-2 prose-ol:my-2
           ">
             <ReactMarkdown>{streamedText}</ReactMarkdown>
           </div>
-          {loading && (
-            <div className="flex items-center gap-2 mt-4 pt-4 border-t border-border">
-              <Loader2 className="h-3 w-3 animate-spin text-primary" />
-              <span className="text-xs text-muted-foreground italic">writing...</span>
-            </div>
-          )}
         </motion.div>
       )}
     </div>
   );
+}
+
+function extractCareersFromMarkdown(text) {
+  if (!text || typeof text !== 'string') return [];
+  const items = [];
+  const sectionPattern = /^##\s+(.+?)$\n([\s\S]*?)(?=^##\s|^#\s|$)/gm;
+  let match;
+  while ((match = sectionPattern.exec(text)) !== null) {
+    const name = match[1].trim();
+    const body = match[2];
+    if (!name || name.length > 100) continue;
+    const salaryCheck = body.match(/\*\*Salary:\*\*/i);
+    if (!salaryCheck) continue;
+
+    const item = { name, duration: "", salary: "", tags: [], description: "" };
+    const durationMatch = body.match(/\*\*Duration:\*\*\s*([^\n·|]+)/i);
+    if (durationMatch) item.duration = durationMatch[1].trim().replace(/[·|].*/, '').trim();
+    const salaryMatch = body.match(/\*\*Salary:\*\*\s*([^\n]+)/i);
+    if (salaryMatch) item.salary = salaryMatch[1].trim();
+    const streamMatch = body.match(/\*\*Stream:\*\*\s*([^\n·|]+)/i);
+    if (streamMatch) item.tags.push(streamMatch[1].trim().replace(/[·|].*/, '').trim());
+    const levelMatch = body.match(/\*\*Level:\*\*\s*([^\n·|]+)/i);
+    if (levelMatch) item.tags.push(levelMatch[1].trim().replace(/[·|].*/, '').trim());
+    const aiMatch = body.match(/\*\*AI Impact:\*\*\s*([^\n·|]+)/i);
+    if (aiMatch) item.tags.push("AI: " + aiMatch[1].trim().replace(/[·|].*/, '').trim());
+    const growthMatch = body.match(/\*\*Growth:\*\*\s*([^\n·|]+)/i);
+    if (growthMatch) item.tags.push("Growth: " + growthMatch[1].trim().replace(/[·|].*/, '').trim());
+    const lines = body.split('\n').filter(l => l.trim());
+    const descLine = [...lines].reverse().find(l => !l.trim().startsWith('-') && !l.trim().startsWith('*') && l.trim().length > 30);
+    if (descLine) item.description = descLine.trim();
+    items.push(item);
+  }
+  return items;
 }

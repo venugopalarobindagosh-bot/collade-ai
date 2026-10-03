@@ -47,27 +47,24 @@ FORMAT EXACTLY LIKE THIS — use ## for each degree:
 
 # ${level} Degrees in ${stream}
 
-[1 sentence overview]
-
 ## [Degree Name 1]
 - **Level:** ${level} · **Duration:** X years
 - **Salary:** ₹X-Y LPA (India) | $X-Y (Global)
 - **AI Impact:** Low/Medium/High · **Growth:** High
 - **Top Universities:** [3 real names]
-[2-3 sentence description of what this degree covers and who it's for]
+[2-3 sentence description]
 
 ## [Degree Name 2]
 (same format)
 
-(repeat for 8 degrees total — mix of mainstream + niche + emerging programs)
+(repeat for 8 degrees — mix mainstream + niche + emerging)
 
 RULES:
-- Use REAL university names
-- Use REAL salary numbers with currency
-- NEVER say "varies" — give specific ranges
-- Each degree description: 2-3 sentences max
-- Keep total under 700 words
-- NO JSON, NO code blocks, NO extra text before # heading`;
+- REAL universities, REAL salaries with currency
+- NEVER say "varies"
+- Each description 2-3 sentences
+- Keep under 700 words
+- NO JSON, NO code blocks`;
 
     try {
       let buffer = "";
@@ -76,14 +73,9 @@ RULES:
         onToken: (text) => {
           buffer += text;
           setStreamedText(buffer);
-
-          // Try to extract degree cards from the accumulated markdown
           const items = extractDegreesFromMarkdown(buffer);
           if (items.length > 0) setParsedItems(items);
-
-          if (scrollRef.current) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-          }
+          if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         },
         onDone: () => setLoading(false),
         onError: (err) => {
@@ -111,30 +103,27 @@ RULES:
     if (selectedStream) fetchDegrees(level, selectedStream);
   };
 
-  const handleSearch = () => {
+  const handleSearch = async () => {
     if (!searchQuery.trim()) return;
-    const spent = deductCredit();
-    spent.then(ok => {
-      if (!ok) {
-        window.dispatchEvent(new CustomEvent("collade:upgrade"));
-        return;
-      }
-      setSelectedLevel(null);
-      setSelectedStream(null);
-      setLoading(true);
-      setStreamedText("");
-      setParsedItems([]);
-      setError(null);
+    const spent = await deductCredit();
+    if (!spent) {
+      window.dispatchEvent(new CustomEvent("collade:upgrade"));
+      return;
+    }
+    setSelectedLevel(null);
+    setSelectedStream(null);
+    setLoading(true);
+    setStreamedText("");
+    setParsedItems([]);
+    setError(null);
 
-      const prompt = `You are Collade AI, an expert career intelligence assistant.
+    const prompt = `You are Collade AI, an expert career intelligence assistant.
 
 List 8 degrees/programs related to: "${searchQuery}"
 
-FORMAT EXACTLY LIKE THIS — use ## for each degree:
+FORMAT EXACTLY LIKE THIS:
 
 # Degrees Related to "${searchQuery}"
-
-[1 sentence overview]
 
 ## [Degree Name 1]
 - **Level:** Undergraduate/Postgraduate/etc · **Duration:** X years
@@ -146,7 +135,7 @@ FORMAT EXACTLY LIKE THIS — use ## for each degree:
 ## [Degree Name 2]
 (same format)
 
-(repeat for 8 total)
+(repeat for 8)
 
 RULES:
 - REAL universities, REAL salaries
@@ -154,8 +143,9 @@ RULES:
 - Keep under 700 words
 - NO JSON`;
 
+    try {
       let buffer = "";
-      invokeLLMStream({
+      await invokeLLMStream({
         prompt,
         onToken: (text) => {
           buffer += text;
@@ -170,7 +160,10 @@ RULES:
           setLoading(false);
         },
       });
-    });
+    } catch (err) {
+      setError(err.message || 'Search failed.');
+      setLoading(false);
+    }
   };
 
   const openDegreeDetail = (degreeName) => {
@@ -241,7 +234,6 @@ RULES:
         </div>
       )}
 
-      {/* Thinking indicator */}
       {loading && !streamedText && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
@@ -250,19 +242,42 @@ RULES:
         >
           <div className="flex items-center justify-center gap-2">
             <Loader2 className="h-5 w-5 animate-spin text-primary" />
-            <p className="font-heading font-semibold text-primary">🎓 Finding degrees for you...</p>
+            <p className="font-heading font-semibold text-primary">🎓 Finding degrees...</p>
           </div>
         </motion.div>
       )}
 
-      {/* Cards view — shown if we successfully parsed items */}
+      {streamedText && loading && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="bg-card border border-border rounded-2xl p-6 sm:p-8 max-h-[50vh] overflow-y-auto"
+          ref={scrollRef}
+        >
+          <div className="flex items-center gap-2 mb-4 pb-3 border-b border-border">
+            <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+            <span className="text-xs font-semibold text-primary uppercase tracking-wider">AI is writing...</span>
+          </div>
+          <div className="prose prose-invert prose-sm max-w-none
+            prose-headings:text-foreground prose-headings:font-bold
+            prose-h1:text-xl prose-h1:mt-0 prose-h1:mb-3 prose-h1:text-primary
+            prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2 prose-h2:text-foreground
+            prose-p:text-muted-foreground prose-p:my-1.5 prose-p:leading-relaxed
+            prose-li:text-muted-foreground prose-li:my-0.5
+            prose-strong:text-foreground prose-strong:font-semibold
+          ">
+            <ReactMarkdown>{streamedText}</ReactMarkdown>
+          </div>
+        </motion.div>
+      )}
+
       {parsedItems.length > 0 && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
           <div className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">
               <span className="font-semibold text-foreground">{parsedItems.length}</span>
               {loading && <span className="text-primary italic"> (streaming...)</span>}
-              {" "}degrees found{selectedLevel && selectedStream ? ` for ${selectedLevel} in ${selectedStream}` : ""}
+              {" "}degrees found
             </p>
             {loading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
           </div>
@@ -270,8 +285,8 @@ RULES:
             {parsedItems.map((degree, i) => (
               <motion.button
                 key={i}
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
+                initial={{ opacity: 0, y: 15, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
                 transition={{ duration: 0.3, delay: i * 0.03 }}
                 onClick={() => openDegreeDetail(degree.name)}
                 className="text-left bg-card border border-border rounded-xl p-4 hover:border-primary/50 hover:shadow-md transition-all group"
@@ -287,7 +302,7 @@ RULES:
                   {degree.salary && (
                     <p className="text-muted-foreground"><span className="font-medium text-foreground">Salary:</span> {degree.salary}</p>
                   )}
-                  {degree.tags && (
+                  {degree.tags?.length > 0 && (
                     <div className="flex flex-wrap gap-1 pt-1">
                       {degree.tags.map((tag, j) => (
                         <span key={j} className="text-[10px] bg-secondary px-2 py-0.5 rounded-md font-medium">{tag}</span>
@@ -304,14 +319,8 @@ RULES:
         </motion.div>
       )}
 
-      {/* Full markdown — shown during streaming if no cards parsed yet, or if parsing fails */}
-      {streamedText && parsedItems.length === 0 && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="bg-card border border-border rounded-2xl p-6 sm:p-8 max-h-[80vh] overflow-y-auto"
-          ref={scrollRef}
-        >
+      {!loading && streamedText && parsedItems.length === 0 && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-card border border-border rounded-2xl p-6 sm:p-8">
           <div className="prose prose-invert prose-sm max-w-none
             prose-headings:text-foreground prose-headings:font-bold
             prose-h1:text-2xl prose-h1:mt-0 prose-h1:mb-4 prose-h1:text-primary
@@ -322,69 +331,39 @@ RULES:
           ">
             <ReactMarkdown>{streamedText}</ReactMarkdown>
           </div>
-          {loading && (
-            <div className="flex items-center gap-2 mt-4 pt-4 border-t border-border">
-              <Loader2 className="h-3 w-3 animate-spin text-primary" />
-              <span className="text-xs text-muted-foreground italic">writing...</span>
-            </div>
-          )}
         </motion.div>
       )}
     </div>
   );
 }
 
-/**
- * Parse degree items from streamed markdown.
- * Looks for ## headings followed by bullet points with key:value pairs.
- * Returns an array of { name, duration, salary, tags, description } objects.
- */
 function extractDegreesFromMarkdown(text) {
   if (!text || typeof text !== 'string') return [];
-
   const items = [];
-
-  // Find all ## sections (skip the # main title)
   const sectionPattern = /^##\s+(.+?)$\n([\s\S]*?)(?=^##\s|^#\s|$)/gm;
   let match;
-
   while ((match = sectionPattern.exec(text)) !== null) {
     const name = match[1].trim();
     const body = match[2];
-
-    // Skip if name is empty or looks like a regular header
     if (!name || name.length > 100) continue;
+    const salaryCheck = body.match(/\*\*Salary:\*\*/i);
+    if (!salaryCheck) continue;
 
     const item = { name, duration: "", salary: "", tags: [], description: "" };
-
-    // Extract duration
     const durationMatch = body.match(/\*\*Duration:\*\*\s*([^\n·|]+)/i);
     if (durationMatch) item.duration = durationMatch[1].trim().replace(/[·|].*/, '').trim();
-
-    // Extract salary
     const salaryMatch = body.match(/\*\*Salary:\*\*\s*([^\n]+)/i);
     if (salaryMatch) item.salary = salaryMatch[1].trim();
-
-    // Extract level, AI impact, growth as tags
     const levelMatch = body.match(/\*\*Level:\*\*\s*([^\n·|]+)/i);
     if (levelMatch) item.tags.push(levelMatch[1].trim().replace(/[·|].*/, '').trim());
-
     const aiMatch = body.match(/\*\*AI Impact:\*\*\s*([^\n·|]+)/i);
     if (aiMatch) item.tags.push("AI: " + aiMatch[1].trim().replace(/[·|].*/, '').trim());
-
     const growthMatch = body.match(/\*\*Growth:\*\*\s*([^\n·|]+)/i);
     if (growthMatch) item.tags.push("Growth: " + growthMatch[1].trim().replace(/[·|].*/, '').trim());
-
-    // Extract description — the last paragraph after all bullets
     const lines = body.split('\n').filter(l => l.trim());
-    const descLine = lines.reverse().find(l => !l.trim().startsWith('-') && !l.trim().startsWith('*') && l.trim().length > 30);
+    const descLine = [...lines].reverse().find(l => !l.trim().startsWith('-') && !l.trim().startsWith('*') && l.trim().length > 30);
     if (descLine) item.description = descLine.trim();
-
-    // Only include if we have enough data
-    if (item.duration || item.salary || item.description) {
-      items.push(item);
-    }
+    items.push(item);
   }
-
   return items;
 }
