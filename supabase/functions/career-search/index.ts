@@ -1,7 +1,6 @@
-// Supabase Edge Function: career-search
+// Supabase Edge Function: career-search (STREAMING)
 // Deploy: supabase functions deploy career-search --project-ref xdmofpfxykrxneybdeal
-// Provider: Airouter.in → routes to DeepSeek V3.2 with JSON mode
-// Timeout: 85s (before Supabase's 120s hard limit)
+// Provider: Airouter.in → DeepSeek V3.2 with real-time streaming
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -16,8 +15,6 @@ const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX = 10;
 const rateLimitMap = new Map();
 
-const AI_TIMEOUT_MS = 85000;
-
 function isRateLimited(userId) {
   const now = Date.now();
   const timestamps = rateLimitMap.get(userId) || [];
@@ -28,13 +25,6 @@ function isRateLimited(userId) {
   return false;
 }
 
-function jsonResponse(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-  });
-}
-
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -43,11 +33,16 @@ serve(async (req) => {
   let creditRow = null;
   let currentBalance = 0;
   let serviceClient = null;
+  let creditsDeducted = false;
 
   try {
+    // ── 1. Verify auth ──
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) {
-      return jsonResponse({ error: 'Missing authorization header' }, 401);
+      return new Response(JSON.stringify({ error: 'Missing authorization header' }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     const userClient = createClient(
@@ -58,20 +53,32 @@ serve(async (req) => {
 
     const { data: { user }, error: userError } = await userClient.auth.getUser();
     if (userError || !user) {
-      return jsonResponse({ error: 'Unauthorized' }, 401);
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
+    // ── 2. Rate limit ──
     if (isRateLimited(user.id)) {
-      return jsonResponse({ error: 'Too many requests. Please wait a moment.' }, 429);
+      return new Response(JSON.stringify({ error: 'Too many requests. Please wait a moment.' }), {
+        status: 429,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
+    // ── 3. Parse request body ──
     const { prompt, query } = await req.json();
     const userQuery = prompt || query;
 
     if (!userQuery) {
-      return jsonResponse({ error: 'Missing prompt or query' }, 400);
+      return new Response(JSON.stringify({ error: 'Missing prompt or query' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
+    // ── 4. Fetch and deduct credits ──
     serviceClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
@@ -83,24 +90,25 @@ serve(async (req) => {
       .eq('user_id', user.id)
       .maybeSingle();
 
-    if (creditError) {
-      console.error('Credit fetch error:', creditError);
-      return jsonResponse({ error: 'Failed to verify credits' }, 500);
-    }
-
-    if (!fetchedCredit) {
-      return jsonResponse({ error: 'No credit record found. Please contact support.' }, 403);
+    if (creditError || !fetchedCredit) {
+      return new Response(JSON.stringify({ error: 'Failed to verify credits' }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     creditRow = fetchedCredit;
     currentBalance = Number(creditRow.balance ?? creditRow.credits_remaining ?? 0);
 
     if (currentBalance < 1) {
-      return jsonResponse({
+      return new Response(JSON.stringify({
         error: 'out_of_credits',
         message: 'You have run out of credits. Please upgrade to continue.',
         credits_remaining: 0,
-      }, 402);
+      }), {
+        status: 402,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     const newBalance = currentBalance - 1;
@@ -115,10 +123,15 @@ serve(async (req) => {
       .eq('id', creditRow.id);
 
     if (updateError) {
-      console.error('Credit deduction error:', updateError);
-      return jsonResponse({ error: 'Failed to deduct credit' }, 500);
+      return new Response(JSON.stringify({ error: 'Failed to deduct credit' }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
+    creditsDeducted = true;
+
+    // ── 5. Get AI key ──
     const airouterKey = Deno.env.get('AIROUTER_API_KEY');
     if (!airouterKey) {
       await serviceClient
@@ -130,13 +143,17 @@ serve(async (req) => {
           updated_at: new Date().toISOString(),
         })
         .eq('id', creditRow.id);
-      return jsonResponse({ error: 'AI key not configured' }, 500);
+      return new Response(JSON.stringify({ error: 'AI key not configured' }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
-    console.log('[career-search] Calling Airouter (85s timeout)...');
+    console.log('[career-search] Starting streaming call to Airouter...');
 
+    // ── 6. Stream from Airouter ──
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => controller.abort(), 85000);
 
     let aiRes;
     try {
@@ -145,7 +162,7 @@ serve(async (req) => {
         headers: {
           'Authorization': `Bearer ${airouterKey}`,
           'Content-Type': 'application/json',
-          'Accept': 'application/json',
+          'Accept': 'text/event-stream',
         },
         body: JSON.stringify({
           model: 'deepseek/deepseek-v3.2',
@@ -175,7 +192,7 @@ If you don't know a specific number, say "The data is uncertain, but typically r
           ],
           temperature: 0.7,
           max_tokens: 2048,
-          response_format: { type: 'json_object' },
+          stream: true,
         }),
         signal: controller.signal,
       });
@@ -183,15 +200,10 @@ If you don't know a specific number, say "The data is uncertain, but typically r
       clearTimeout(timeoutId);
     }
 
-    console.log('[career-search] Airouter status:', aiRes.status);
-    const rawText = await aiRes.text();
+    if (!aiRes.ok || !aiRes.body) {
+      console.error('[career-search] Airouter error:', aiRes.status);
 
-    let aiData;
-    try {
-      aiData = JSON.parse(rawText);
-    } catch (parseErr) {
-      console.error('[career-search] Non-JSON response. Raw:', rawText.slice(0, 300));
-
+      // Refund
       await serviceClient
         .from('user_credits')
         .update({
@@ -202,61 +214,111 @@ If you don't know a specific number, say "The data is uncertain, but typically r
         })
         .eq('id', creditRow.id);
 
-      return jsonResponse({ error: 'AI returned an invalid response. Please try again.' }, 502);
+      return new Response(JSON.stringify({
+        error: 'AI provider error',
+        message: 'The AI service is temporarily unavailable. Your credit was refunded.',
+      }), {
+        status: 502,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
-    if (!aiRes.ok) {
-      console.error('[career-search] Airouter error:', aiData);
+    // ── 7. Transform and stream the response ──
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
+    const encoder = new TextEncoder();
 
-      await serviceClient
-        .from('user_credits')
-        .update({
-          balance: currentBalance,
-          credits_remaining: currentBalance,
-          access_locked: currentBalance <= 0,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', creditRow.id);
+    // Send credit info as the first SSE event
+    const creditEvent = `event: credits\ndata: ${JSON.stringify({ credits_remaining: newBalance, plan: creditRow.plan })}\n\n`;
+    writer.write(encoder.encode(creditEvent));
 
-      return jsonResponse({ error: aiData?.error?.message || 'AI provider error' }, aiRes.status);
-    }
+    // Pipe Airouter's SSE chunks directly to the client
+    const reader = aiRes.body.getReader();
+    const decoder = new TextDecoder();
 
-    const answer = aiData.choices?.[0]?.message?.content || '';
+    (async () => {
+      try {
+        let buffer = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-    return jsonResponse({
-      answer,
-      result: answer,
-      response: answer,
-      credits_remaining: newBalance,
-      plan: creditRow.plan,
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const data = line.slice(6).trim();
+              if (data === '[DONE]') {
+                writer.write(encoder.encode('event: done\ndata: {}\n\n'));
+                continue;
+              }
+              try {
+                const parsed = JSON.parse(data);
+                const content = parsed.choices?.[0]?.delta?.content;
+                if (content) {
+                  writer.write(encoder.encode(`event: token\ndata: ${JSON.stringify({ text: content })}\n\n`));
+                }
+              } catch (e) {
+                // Ignore malformed chunks
+              }
+            }
+          }
+        }
+        await writer.close();
+      } catch (err) {
+        console.error('[career-search] Stream error:', err);
+        try {
+          writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: 'Stream interrupted' })}\n\n`));
+        } catch (e) {}
+        await writer.close();
+      }
+    })();
+
+    return new Response(readable, {
+      headers: {
+        ...corsHeaders,
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
     });
 
   } catch (err) {
     console.error('[career-search] Error:', err);
 
-    if (err.name === 'AbortError') {
-      if (serviceClient && creditRow) {
-        try {
-          await serviceClient
-            .from('user_credits')
-            .update({
-              balance: currentBalance,
-              credits_remaining: currentBalance,
-              access_locked: currentBalance <= 0,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', creditRow.id);
-        } catch (refundErr) {
-          console.error('[career-search] Refund failed:', refundErr);
-        }
+    // Refund if credits were deducted
+    if (creditsDeducted && serviceClient && creditRow) {
+      try {
+        await serviceClient
+          .from('user_credits')
+          .update({
+            balance: currentBalance,
+            credits_remaining: currentBalance,
+            access_locked: currentBalance <= 0,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', creditRow.id);
+      } catch (refundErr) {
+        console.error('[career-search] Refund failed:', refundErr);
       }
-
-      return jsonResponse({
-        error: 'timeout',
-        message: 'AI is taking too long. Your credit was refunded. Please try again with a shorter question.',
-      }, 504);
     }
 
-    return jsonResponse({ error: err.message || 'Something went wrong' }, 500);
+    if (err.name === 'AbortError') {
+      return new Response(JSON.stringify({
+        error: 'timeout',
+        message: 'AI is taking too long. Your credit was refunded.',
+      }), {
+        status: 504,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    return new Response(JSON.stringify({ error: err.message || 'Something went wrong' }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   }
 });

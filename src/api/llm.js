@@ -5,7 +5,7 @@ const FUNCTION_NAME = 'career-search';
 const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const BASE_URL = import.meta.env.VITE_SUPABASE_URL;
 
-// Custom error for "out of credits" so pages can react appropriately
+// Custom error for "out of credits"
 export class OutOfCreditsError extends Error {
   constructor(message = 'You have run out of credits. Please upgrade to continue.') {
     super(message);
@@ -26,10 +26,6 @@ function parseAIResponse(data) {
   return data;
 }
 
-/**
- * Broadcast the new credit balance to any component listening.
- * useCredits() will pick this up and re-render.
- */
 function broadcastCreditsUpdate(creditsRemaining, premium) {
   if (creditsRemaining === undefined || creditsRemaining === null) return;
   try {
@@ -38,9 +34,7 @@ function broadcastCreditsUpdate(creditsRemaining, premium) {
         detail: { credits_remaining: creditsRemaining, premium: !!premium },
       })
     );
-  } catch (e) {
-    // window not available (SSR) — ignore
-  }
+  } catch (e) {}
 }
 
 async function callEdgeFunction(body, accessToken) {
@@ -62,9 +56,7 @@ async function callEdgeFunction(body, accessToken) {
   const text = await res.text();
   console.log('[AI] Response status:', res.status);
 
-  // ── Handle specific status codes ──
   if (res.status === 402) {
-    // Out of credits
     let msg = 'You have run out of credits. Please upgrade to continue.';
     try {
       const parsed = JSON.parse(text);
@@ -75,7 +67,6 @@ async function callEdgeFunction(body, accessToken) {
   }
 
   if (res.status === 429) {
-    // Rate limited
     const err = new Error('Too many requests. Please wait a moment and try again.');
     err.status = 429;
     throw err;
@@ -96,6 +87,9 @@ async function callEdgeFunction(body, accessToken) {
   return parsed;
 }
 
+/**
+ * Non-streaming invoke (kept for backward compatibility)
+ */
 export async function invokeLLM({ prompt, response_json_schema, add_context_from_internet }) {
   const body = {
     prompt,
@@ -120,14 +114,12 @@ export async function invokeLLM({ prompt, response_json_schema, add_context_from
     const data = await callEdgeFunction(body, accessToken);
     console.log('[AI] Success');
 
-    // Server returns credits_remaining — broadcast to UI
     if (data && typeof data === 'object') {
       broadcastCreditsUpdate(data.credits_remaining, data.premium);
     }
 
     return parseAIResponse(data);
   } catch (firstErr) {
-    // Don't retry on 401, 402, 429
     if (firstErr.status !== 401) {
       console.error('[AI] Request failed:', firstErr.message);
       throw firstErr;
@@ -157,6 +149,163 @@ export async function invokeLLM({ prompt, response_json_schema, add_context_from
       }
       throw retryErr;
     }
+  }
+}
+
+/**
+ * STREAMING invoke — calls onToken for each chunk of text
+ *
+ * @param {Object} options
+ * @param {string} options.prompt - The prompt
+ * @param {Function} options.onToken - Called with each text chunk: onToken(text)
+ * @param {Function} options.onDone - Called when stream completes with full text
+ * @param {Function} options.onError - Called with error
+ */
+export async function invokeLLMStream({ prompt, onToken, onDone, onError }) {
+  console.log('[AI-Stream] Starting, prompt length:', prompt?.length);
+
+  let accessToken;
+  try {
+    accessToken = await getFreshAccessToken();
+  } catch (err) {
+    console.error('[AI-Stream] No valid session:', err.message);
+    const authErr = err instanceof AuthRequiredError
+      ? err
+      : new AuthRequiredError('Please log in again to use AI features.');
+    if (onError) onError(authErr);
+    throw authErr;
+  }
+
+  const url = `${BASE_URL}/functions/v1/${FUNCTION_NAME}`;
+  const headers = {
+    Authorization: `Bearer ${accessToken}`,
+    apikey: ANON_KEY,
+    'Content-Type': 'application/json',
+    'Accept': 'text/event-stream',
+  };
+
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ prompt, query: prompt }),
+    });
+  } catch (fetchErr) {
+    console.error('[AI-Stream] Fetch failed:', fetchErr);
+    const err = new Error('Failed to connect. Please check your internet and try again.');
+    if (onError) onError(err);
+    throw err;
+  }
+
+  // Handle non-streaming error responses
+  if (!res.ok) {
+    const text = await res.text();
+    let errMsg = 'AI request failed';
+    let errCode = null;
+
+    try {
+      const parsed = JSON.parse(text);
+      errMsg = parsed.message || parsed.error || errMsg;
+      errCode = parsed.error;
+    } catch {
+      errMsg = text || errMsg;
+    }
+
+    if (res.status === 402) {
+      broadcastCreditsUpdate(0, false);
+      const err = new OutOfCreditsError(errMsg);
+      if (onError) onError(err);
+      throw err;
+    }
+
+    if (res.status === 429) {
+      const err = new Error('Too many requests. Please wait a moment.');
+      err.status = 429;
+      if (onError) onError(err);
+      throw err;
+    }
+
+    if (errCode === 'timeout') {
+      const err = new Error('AI is taking too long. Your credit was refunded.');
+      err.status = 504;
+      if (onError) onError(err);
+      throw err;
+    }
+
+    const err = new Error(errMsg);
+    err.status = res.status;
+    if (onError) onError(err);
+    throw err;
+  }
+
+  if (!res.body) {
+    const err = new Error('No response body received');
+    if (onError) onError(err);
+    throw err;
+  }
+
+  // Read the SSE stream
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let fullText = '';
+  let doneEmitted = false;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      let eventType = null;
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim();
+          continue;
+        }
+
+        if (line.startsWith('data: ')) {
+          const dataStr = line.slice(6).trim();
+          if (!dataStr) continue;
+
+          if (eventType === 'credits') {
+            try {
+              const parsed = JSON.parse(dataStr);
+              broadcastCreditsUpdate(parsed.credits_remaining, parsed.plan === 'premium');
+            } catch (e) {}
+          } else if (eventType === 'token') {
+            try {
+              const parsed = JSON.parse(dataStr);
+              if (parsed.text) {
+                fullText += parsed.text;
+                if (onToken) onToken(parsed.text);
+              }
+            } catch (e) {}
+          } else if (eventType === 'done') {
+            doneEmitted = true;
+            if (onDone) onDone(fullText);
+          } else if (eventType === 'error') {
+            try {
+              const parsed = JSON.parse(dataStr);
+              const err = new Error(parsed.error || 'Stream error');
+              if (onError) onError(err);
+            } catch (e) {}
+          }
+          eventType = null;
+        }
+      }
+    }
+
+    if (!doneEmitted && onDone) onDone(fullText);
+
+  } catch (err) {
+    console.error('[AI-Stream] Stream read error:', err);
+    if (onError) onError(err);
+    throw err;
   }
 }
 
