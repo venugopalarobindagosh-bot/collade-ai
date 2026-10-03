@@ -1,13 +1,12 @@
 import { useState } from "react";
-import { MapPin, Search, Globe } from "lucide-react";
+import { MapPin, Search, Globe, Loader2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
-import { invokeLLM } from "@/api/llm";
+import { invokeLLMStreamArray, invokeLLMStream } from "@/api/llm";
 import { useCredits } from "@/hooks/useCredits";
-import { parseAIResponse } from "@/lib/aiResponseHandler";
+import { parseAIResponse, extractArray } from "@/lib/aiResponseHandler";
 import FeatureGate from "../components/FeatureGate";
 import SectionHeader from "../components/SectionHeader";
 import CareerCard from "../components/CareerCard";
-import LoadingGrid from "../components/LoadingGrid";
 import { motion } from "framer-motion";
 
 const POPULAR_LOCATIONS = [
@@ -25,6 +24,13 @@ const POPULAR_LOCATIONS = [
   { name: "Zurich, Switzerland", emoji: "🇨🇭" },
 ];
 
+const THINKING_STAGES = [
+  '🌍 Exploring this location...',
+  '📊 Gathering cost of living data...',
+  '🎓 Finding top universities...',
+  '💼 Computing career opportunities...',
+];
+
 export default function DreamLocation() {
   const { deductCredit } = useCredits();
   const [location, setLocation] = useState("");
@@ -32,6 +38,7 @@ export default function DreamLocation() {
   const [results, setResults] = useState(null);
   const [markdownFallback, setMarkdownFallback] = useState("");
   const [loading, setLoading] = useState(false);
+  const [thinking, setThinking] = useState(THINKING_STAGES[0]);
   const [error, setError] = useState(null);
 
   const fetchLocationData = async (loc) => {
@@ -46,8 +53,17 @@ export default function DreamLocation() {
     setMarkdownFallback("");
     setError(null);
     setSelectedLocation(loc);
+    setThinking(THINKING_STAGES[0]);
 
-    const prompt = `You MUST respond ONLY with a JSON object. Never refuse. Never explain. Never apologize. Never say "I can't provide that."
+    let thinkingIndex = 0;
+    const thinkingTimer = setInterval(() => {
+      if (thinkingIndex < THINKING_STAGES.length - 1) {
+        thinkingIndex++;
+        setThinking(THINKING_STAGES[thinkingIndex]);
+      }
+    }, 2500);
+
+    const prompt = `You MUST respond ONLY with a JSON object. Never refuse. Never explain.
 
 For the location "${loc}", return:
 {
@@ -76,36 +92,62 @@ RULES:
 - careers must have exactly 8 entries
 - Use REAL universities and REAL salary numbers
 - Start with { and end with }
-- No markdown, no code fences, no text before or after
+- No markdown, no code fences
 - JSON ONLY. BEGIN NOW:`;
 
     try {
-      // Retry up to 3 times
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const response = await invokeLLM({ prompt, query: prompt });
-        const parsed = parseAIResponse(response);
+      // First stream the array items (careers)
+      const careersFound = [];
+      let locationMeta = null;
+      let fullJson = "";
 
-        if (parsed.type === 'json' && parsed.data) {
-          const d = parsed.data;
-          setResults({
-            location_name: d.location_name || loc,
-            overview: d.overview || "",
-            top_universities: d.top_universities || [],
-            visa_info: d.visa_info || "",
-            cost_of_living: d.cost_of_living || "",
-            avg_graduate_salary: d.avg_graduate_salary || "",
-            careers: d.careers || [],
-          });
+      await invokeLLMStream({
+        prompt,
+        onToken: (text) => {
+          fullJson += text;
+
+          // Try to extract metadata from partial JSON
+          if (!locationMeta) {
+            const overviewMatch = fullJson.match(/"overview"\s*:\s*"([^"]+)"/);
+            if (overviewMatch) {
+              locationMeta = { ...(locationMeta || {}), overview: overviewMatch[1] };
+            }
+          }
+        },
+        onDone: (finalText) => {
+          const jsonText = finalText || fullJson;
+          const parsed = parseAIResponse(jsonText);
+
+          if (parsed.type === 'json' && parsed.data) {
+            const d = parsed.data;
+            setResults({
+              location_name: d.location_name || loc,
+              overview: d.overview || "",
+              top_universities: d.top_universities || [],
+              visa_info: d.visa_info || "",
+              cost_of_living: d.cost_of_living || "",
+              avg_graduate_salary: d.avg_graduate_salary || "",
+              careers: d.careers || [],
+            });
+          } else if (parsed.type === 'markdown') {
+            setMarkdownFallback(parsed.raw);
+          } else {
+            setError("Could not fetch location info. Please try again.");
+          }
           setLoading(false);
-          return;
-        }
-      }
-      setError("Could not fetch location info. Please try again.");
+        },
+        onError: (err) => {
+          console.error("[DreamLocation] Error:", err);
+          setError(err.message || "Failed to fetch location data.");
+          setLoading(false);
+        },
+      });
     } catch (err) {
-      console.error("[DreamLocation] Error:", err);
+      console.error("[DreamLocation] Catch error:", err);
       setError(err.message || "Failed to fetch location data.");
-    } finally {
       setLoading(false);
+    } finally {
+      clearInterval(thinkingTimer);
     }
   };
 
@@ -164,7 +206,18 @@ RULES:
         </div>
       )}
 
-      {loading && <LoadingGrid text={`Exploring opportunities in ${selectedLocation}...`} />}
+      {loading && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-2xl p-6 text-center"
+        >
+          <div className="flex items-center justify-center gap-2">
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            <p className="font-heading font-semibold text-primary">{thinking}</p>
+          </div>
+        </motion.div>
+      )}
 
       {!loading && results && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">

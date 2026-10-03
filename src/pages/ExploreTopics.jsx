@@ -1,12 +1,11 @@
 import { useState } from "react";
-import { Compass, Search } from "lucide-react";
+import { Compass, Search, Loader2, Sparkles } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useCredits } from "@/hooks/useCredits";
-import { invokeLLM } from "@/api/llm";
+import { invokeLLMStreamArray } from "@/api/llm";
 import { parseAIResponse, extractArray } from "@/lib/aiResponseHandler";
 import SectionHeader from "../components/SectionHeader";
 import CareerCard from "../components/CareerCard";
-import LoadingGrid from "../components/LoadingGrid";
 import { motion } from "framer-motion";
 
 const TOPICS = [
@@ -36,14 +35,24 @@ const TOPICS = [
   { name: "Travel & Hospitality", emoji: "✈️" },
 ];
 
+const FUN_FACTS = [
+  "AI/ML roles grew 40% in 2024 — fastest of any tech field.",
+  "Careers combining tech + creativity are the most AI-resistant.",
+  "Data Science salaries in India grew 22% year-over-year.",
+  "Green tech jobs will reach 24 million worldwide by 2030.",
+  "Healthcare + tech roles have the lowest AI disruption risk.",
+];
+
 export default function ExploreTopics() {
   const { deductCredit } = useCredits();
   const [selectedTopic, setSelectedTopic] = useState(null);
   const [results, setResults] = useState([]);
   const [markdownFallback, setMarkdownFallback] = useState("");
   const [loading, setLoading] = useState(false);
+  const [thinking, setThinking] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [error, setError] = useState(null);
+  const [funFact] = useState(() => FUN_FACTS[Math.floor(Math.random() * FUN_FACTS.length)]);
 
   const fetchTopic = async (topic) => {
     const spent = await deductCredit();
@@ -56,9 +65,9 @@ export default function ExploreTopics() {
     setResults([]);
     setMarkdownFallback("");
     setError(null);
+    setThinking("💭 Analyzing your topic...");
 
-    try {
-      const prompt = `For the topic/interest "${topic}", list ALL related degrees, diplomas, certifications, and career paths globally.
+    const prompt = `For the topic/interest "${topic}", list ALL related degrees, diplomas, certifications, and career paths globally.
 
 Include: mainstream programs, niche specializations, emerging fields, professional certifications, online diplomas, and unconventional paths.
 
@@ -77,38 +86,43 @@ Return a JSON object with a "careers" array. Each career should have:
 - locations (array)
 - skills_needed (array)
 
-IMPORTANT: Return ONLY valid JSON. No markdown, no code fences, no explanation. Start your response with { and end with }.`;
+IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start your response with { and end with }.`;
 
-      const response = await invokeLLM({
-        prompt: prompt,
-        query: prompt
+    let fullJson = "";
+
+    try {
+      await invokeLLMStreamArray({
+        prompt,
+        arrayKey: "careers",
+        onThinking: (text) => setThinking(text),
+        onItem: (item) => {
+          setResults(prev => [...prev, item]);
+        },
+        onDone: async () => {
+          // Fallback if no items extracted
+          if (results.length === 0 && fullJson) {
+            const parsed = parseAIResponse(fullJson);
+            if (parsed.type === 'json') {
+              const arr = extractArray(parsed.data, ['careers', 'matches', 'results']);
+              setResults(arr);
+            } else if (parsed.type === 'markdown') {
+              setMarkdownFallback(parsed.raw);
+            }
+          }
+          setThinking("");
+          setLoading(false);
+        },
+        onError: (err) => {
+          console.error('[ExploreTopics] Error:', err);
+          setError(err.message || 'Failed to find careers. Please try again.');
+          setThinking("");
+          setLoading(false);
+        },
       });
-
-      console.log('[ExploreTopics] Raw response:', response);
-
-      const parsed = parseAIResponse(response);
-      console.log('[ExploreTopics] Parsed type:', parsed.type);
-
-      if (parsed.type === 'json') {
-        const careers = extractArray(parsed.data, ['careers', 'matches', 'results']);
-        console.log('[ExploreTopics] Extracted careers:', careers.length);
-        setResults(careers);
-        if (careers.length === 0) {
-          // JSON was parsed but array is empty — show raw as fallback
-          setMarkdownFallback(parsed.raw);
-        }
-      } else if (parsed.type === 'markdown') {
-        // AI returned markdown — show it directly
-        console.log('[ExploreTopics] Rendering as markdown');
-        setMarkdownFallback(parsed.raw);
-      } else {
-        setError('No results returned. Please try again.');
-      }
-
     } catch (err) {
-      console.error('[ExploreTopics] Error:', err);
-      setError(err.message || 'Failed to find careers. Please try again.');
-    } finally {
+      console.error('[ExploreTopics] Catch error:', err);
+      setError(err.message || 'Failed to find careers.');
+      setThinking("");
       setLoading(false);
     }
   };
@@ -127,7 +141,6 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no code fences, no explanation. 
         icon={Compass}
       />
 
-      {/* Search */}
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <input
@@ -139,14 +152,12 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no code fences, no explanation. 
         />
       </div>
 
-      {/* Error Message */}
       {error && (
         <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4 text-destructive">
           <p className="text-sm">{error}</p>
         </div>
       )}
 
-      {/* Topic grid */}
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
         {TOPICS.map((topic, i) => (
           <motion.button
@@ -171,24 +182,51 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no code fences, no explanation. 
         ))}
       </div>
 
-      {/* Results */}
-      {loading && <LoadingGrid text={`Finding careers in ${selectedTopic}...`} />}
+      {/* Thinking indicator */}
+      {loading && results.length === 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-2xl p-6 text-center space-y-3"
+        >
+          <div className="flex items-center justify-center gap-2">
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            <p className="font-heading font-semibold text-primary">{thinking}</p>
+          </div>
+          <div className="bg-white/50 rounded-xl p-4 max-w-md mx-auto">
+            <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold mb-1">💡 Fun Fact</p>
+            <p className="text-sm text-foreground">{funFact}</p>
+          </div>
+        </motion.div>
+      )}
 
-      {/* Structured cards */}
-      {!loading && results.length > 0 && (
+      {/* Results — cards appear one by one as they stream in */}
+      {results.length > 0 && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            {results.length} career paths found for <span className="font-semibold text-foreground">{selectedTopic}</span>
-          </p>
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">
+              <span className="font-semibold text-foreground">{results.length}</span>
+              {loading && <span className="text-primary italic"> (streaming...)</span>}
+              {" "}career paths found for <span className="font-semibold text-foreground">{selectedTopic}</span>
+            </p>
+            {loading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
+          </div>
           <div className="grid sm:grid-cols-2 gap-3">
             {results.map((career, i) => (
-              <CareerCard key={i} career={career} index={i} />
+              <motion.div
+                key={i}
+                initial={{ opacity: 0, y: 15, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ duration: 0.3 }}
+              >
+                <CareerCard career={career} index={i} />
+              </motion.div>
             ))}
           </div>
         </motion.div>
       )}
 
-      {/* Markdown fallback — shows when JSON parse fails but AI returned content */}
+      {/* Markdown fallback */}
       {!loading && markdownFallback && results.length === 0 && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
           <p className="text-sm text-muted-foreground">
@@ -201,7 +239,6 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no code fences, no explanation. 
             prose-p:text-muted-foreground prose-p:my-1.5
             prose-li:text-muted-foreground prose-li:my-0.5
             prose-strong:text-foreground
-            prose-code:text-primary prose-code:bg-secondary prose-code:px-1 prose-code:rounded
           ">
             <ReactMarkdown>{markdownFallback}</ReactMarkdown>
           </div>

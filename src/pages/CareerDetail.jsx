@@ -1,9 +1,8 @@
 import { useState, useEffect } from "react";
-import { ArrowLeft, Clock, DollarSign, Zap, TrendingUp, BookOpen, GraduationCap, Users, Brain, Briefcase, Globe, Star } from "lucide-react";
+import { ArrowLeft, Clock, DollarSign, Zap, TrendingUp, BookOpen, GraduationCap, Users, Brain, Briefcase, Globe, Star, Loader2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
-import { invokeLLM } from "@/api/llm";
+import { invokeLLMStream } from "@/api/llm";
 import { parseAIResponse } from "@/lib/aiResponseHandler";
-import LoadingGrid from "../components/LoadingGrid";
 import { motion } from "framer-motion";
 
 function safeString(value) {
@@ -18,6 +17,13 @@ function safeString(value) {
   return String(value);
 }
 
+const THINKING_STAGES = [
+  '💭 Gathering career intelligence...',
+  '📊 Computing salary data...',
+  '🎯 Analyzing AI impact...',
+  '✨ Writing your guide...',
+];
+
 export default function CareerDetail() {
   const urlParams = new URLSearchParams(window.location.search);
   const name = urlParams.get("name") || "";
@@ -28,12 +34,24 @@ export default function CareerDetail() {
   const [markdownFallback, setMarkdownFallback] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [thinking, setThinking] = useState(THINKING_STAGES[0]);
 
   useEffect(() => {
     if (!name) return;
+
+    let accumulatedJson = "";
+    let thinkingIndex = 0;
+    const thinkingTimer = setInterval(() => {
+      if (thinkingIndex < THINKING_STAGES.length - 1) {
+        thinkingIndex++;
+        setThinking(THINKING_STAGES[thinkingIndex]);
+      }
+    }, 2500);
+
     const fetchDetail = async () => {
       setLoading(true);
       setError(null);
+
       try {
         const prompt = `Give me a hyper-detailed, specific career guide for: "${name}"
 ${stream ? `Stream: ${stream}` : ""}
@@ -66,72 +84,91 @@ RULES: NEVER say "varies". ALWAYS use real numbers and specific names.
 
 IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
 
-        const response = await invokeLLM({ prompt: prompt, query: prompt });
-        console.log('[CareerDetail] Raw response:', response);
+        await invokeLLMStream({
+          prompt,
+          onToken: (text) => {
+            accumulatedJson += text;
+          },
+          onDone: (fullText) => {
+            const jsonText = fullText || accumulatedJson;
+            const parsed = parseAIResponse(jsonText);
 
-        const parsed = parseAIResponse(response);
-        console.log('[CareerDetail] Parsed type:', parsed.type);
-
-        if (parsed.type === 'json' && parsed.data) {
-          const d = parsed.data;
-          const detailData = {
-            name: d.name || name,
-            full_title: d.full_title || name,
-            stream: d.stream || stream || "Various",
-            specialization: d.specialization || "",
-            level: d.level || level || "Varies",
-            duration: d.duration || "4 years",
-            overview: d.overview || "",
-            what_you_will_learn: d.what_you_will_learn || [],
-            required_subjects: d.required_subjects || [],
-            entrance_exams: d.entrance_exams || [],
-            top_universities_india: d.top_universities_india || [],
-            top_universities_global: d.top_universities_global || [],
-            career_options: d.career_options || [],
-            salary_india: d.salary_india || "",
-            salary_global: d.salary_global || "",
-            salary_entry: d.salary_entry || "",
-            salary_mid: d.salary_mid || "",
-            salary_senior: d.salary_senior || "",
-            ai_impact: d.ai_impact || "",
-            ai_impact_detail: d.ai_impact_detail || "",
-            growth_potential: d.growth_potential || "",
-            growth_detail: d.growth_detail || "",
-            personality_fit: d.personality_fit || "",
-            stress_level: d.stress_level || "",
-            work_life_balance: d.work_life_balance || "",
-            skills_needed: d.skills_needed || [],
-            future_proof_skills: d.future_proof_skills || [],
-            popular_locations: d.popular_locations || [],
-            emerging_specializations: d.emerging_specializations || [],
-            related_certifications: d.related_certifications || [],
-            internship_opportunities: d.internship_opportunities || "",
-            online_resources: d.online_resources || [],
-            day_in_the_life: d.day_in_the_life || "",
-            pros: d.pros || [],
-            cons: d.cons || [],
-            quick_summary: d.quick_summary || "",
-          };
-          setDetail(detailData);
-        } else if (parsed.type === 'markdown') {
-          setMarkdownFallback(parsed.raw);
-        } else {
-          setError('No career details found. Please try again.');
-        }
+            if (parsed.type === 'json' && parsed.data) {
+              const d = parsed.data;
+              setDetail({
+                name: d.name || name,
+                full_title: d.full_title || name,
+                stream: d.stream || stream || "Various",
+                specialization: d.specialization || "",
+                level: d.level || level || "Varies",
+                duration: d.duration || "4 years",
+                overview: d.overview || "",
+                what_you_will_learn: d.what_you_will_learn || [],
+                required_subjects: d.required_subjects || [],
+                entrance_exams: d.entrance_exams || [],
+                top_universities_india: d.top_universities_india || [],
+                top_universities_global: d.top_universities_global || [],
+                career_options: d.career_options || [],
+                salary_india: d.salary_india || "",
+                salary_global: d.salary_global || "",
+                salary_entry: d.salary_entry || "",
+                salary_mid: d.salary_mid || "",
+                salary_senior: d.salary_senior || "",
+                ai_impact: d.ai_impact || "",
+                ai_impact_detail: d.ai_impact_detail || "",
+                growth_potential: d.growth_potential || "",
+                growth_detail: d.growth_detail || "",
+                personality_fit: d.personality_fit || "",
+                stress_level: d.stress_level || "",
+                work_life_balance: d.work_life_balance || "",
+                skills_needed: d.skills_needed || [],
+                future_proof_skills: d.future_proof_skills || [],
+                popular_locations: d.popular_locations || [],
+                emerging_specializations: d.emerging_specializations || [],
+                related_certifications: d.related_certifications || [],
+                internship_opportunities: d.internship_opportunities || "",
+                online_resources: d.online_resources || [],
+                day_in_the_life: d.day_in_the_life || "",
+                pros: d.pros || [],
+                cons: d.cons || [],
+                quick_summary: d.quick_summary || "",
+              });
+            } else if (parsed.type === 'markdown') {
+              setMarkdownFallback(parsed.raw);
+            } else {
+              setError('No career details found. Please try again.');
+            }
+            setLoading(false);
+          },
+          onError: (err) => {
+            console.error('[CareerDetail] Stream error:', err);
+            setError(err.message || 'Failed to load career details.');
+            setLoading(false);
+          },
+        });
       } catch (err) {
         console.error('[CareerDetail] Error:', err);
         setError(err.message || 'Failed to load career details.');
-      } finally {
         setLoading(false);
       }
     };
+
     fetchDetail();
+    return () => clearInterval(thinkingTimer);
   }, [name, stream, level]);
 
-  if (loading) return <LoadingGrid text={`Loading details for ${name}...`} />;
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 space-y-4">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <p className="font-heading font-semibold text-primary">{thinking}</p>
+        <p className="text-xs text-muted-foreground">Loading details for {name}...</p>
+      </div>
+    );
+  }
+
   if (error) return <p className="text-center py-20 text-destructive">{error}</p>;
 
-  // Markdown fallback
   if (markdownFallback && !detail) {
     return (
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
