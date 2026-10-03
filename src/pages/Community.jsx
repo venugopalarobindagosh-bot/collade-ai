@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
-import { Users, Send, Loader2, ThumbsUp, MessageCircle, Sparkles } from "lucide-react";
+import { Users, Send, Loader2, ThumbsUp, Sparkles } from "lucide-react";
 import PostReplies from "../components/PostReplies";
 import { useCredits } from "@/hooks/useCredits";
 import FeatureGate from "../components/FeatureGate";
 import { entities } from "@/api/entities";
-import { invokeLLM } from "@/api/llm";
+import { invokeLLMStream } from "@/api/llm";
 import { supabase } from "@/api/supabaseClient";
 import SectionHeader from "../components/SectionHeader";
 import ReactMarkdown from "react-markdown";
@@ -14,6 +14,23 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 const TOPICS = ["General", "Engineering", "Medicine", "Design", "Business", "Law", "Arts", "Technology", "Abroad Studies"];
 
+const COMMUNITY_PROMPT = (question) => `You are PathFinder AI, a friendly career mentor for students.
+
+Answer this question clearly and helpfully:
+
+"${question}"
+
+Structure:
+1. Direct answer (1-2 sentences)
+2. Key points (3-4 bullets with specifics — salary, education, skills)
+3. Actionable next step (1 sentence)
+
+RULES:
+- Keep it under 200 words
+- Use markdown (## headings, bullets, **bold**)
+- Be encouraging and specific
+- No fluff, no "it depends"`;
+
 export default function Community() {
   const { deductCredit } = useCredits();
   const [posts, setPosts] = useState([]);
@@ -21,6 +38,7 @@ export default function Community() {
   const [authorName, setAuthorName] = useState("");
   const [topic, setTopic] = useState("General");
   const [loading, setLoading] = useState(false);
+  const [streamingText, setStreamingText] = useState("");
   const [aiLoading, setAiLoading] = useState(null);
   const [error, setError] = useState(null);
 
@@ -31,84 +49,89 @@ export default function Community() {
 
   const submitQuestion = async () => {
     if (!question.trim()) return;
-    
+
     const spent = await deductCredit();
-    if (!spent) { 
-      window.dispatchEvent(new CustomEvent("collade:upgrade")); 
-      return; 
+    if (!spent) {
+      window.dispatchEvent(new CustomEvent("collade:upgrade"));
+      return;
     }
-    
+
     setLoading(true);
     setError(null);
-    
+    setStreamingText("");
+
+    const askedQuestion = question.trim();
+
     try {
-      const prompt = `You are PathFinder AI, a friendly and expert career guidance assistant for high school and college students.
+      // 1. Create the post immediately (without AI answer yet)
+      const created = await entities.MentorPost.create({
+        question: askedQuestion,
+        author_name: authorName.trim() || "Anonymous Student",
+        topic,
+        likes: 0,
+      });
 
-Answer this question in a helpful, encouraging, and detailed way:
-
-"${question.trim()}"
-
-You MUST:
-- Use markdown formatting (headings, bullet points, bold)
-- Be conversational and teen-friendly
-- Include specific examples, salary ranges, and education paths
-- Provide actionable next steps
-- NEVER say "varies" or "it depends" without giving specific context
-- If you don't know something, say "I'm not sure, but typically X or Y"
-
-Structure your answer:
-1. Direct answer to the question
-2. Key details (salary, education, skills)
-3. Pros and cons (if applicable)
-4. Next steps for the student
-5. Encouraging closing note`;
-
-      const [created, aiRes] = await Promise.all([
-        entities.MentorPost.create({
-          question: question.trim(),
-          author_name: authorName.trim() || "Anonymous Student",
-          topic,
-          likes: 0
-        }),
-        invokeLLM({ prompt: prompt, query: prompt })
-      ]);
-
-      console.log('[Community] AI Response:', aiRes);
-
-      const updated = await entities.MentorPost.update(created.id, { ai_answer: aiRes });
-      setPosts(prev => [updated, ...prev]);
+      // 2. Show the post with streaming answer in real-time
+      setPosts(prev => [{ ...created, ai_answer: "" }, ...prev]);
       setQuestion("");
 
-      // ── Fire-and-forget spam check (background) ──
-      (async () => {
-        try {
-          const { data: { session } } = await supabase.auth.getSession();
-          if (!session?.access_token) return;
-          await fetch(
-            `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/moderate-content`,
-            {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${session.access_token}`,
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                postId: created.id,
-                table: 'mentor_post',
-                text: question.trim(),
-              }),
-            }
-          );
-        } catch (modErr) {
-          console.error('[Community] Moderation check failed:', modErr);
-        }
-      })();
+      // 3. Stream the AI answer
+      let fullAnswer = "";
+      await invokeLLMStream({
+        prompt: COMMUNITY_PROMPT(askedQuestion),
+        onToken: (text) => {
+          fullAnswer += text;
+          setStreamingText(fullAnswer);
+        },
+        onDone: async (finalText) => {
+          const answerText = finalText || fullAnswer;
+          try {
+            const updated = await entities.MentorPost.update(created.id, { ai_answer: answerText });
+            setPosts(prev => prev.map(p => p.id === created.id ? updated : p));
 
+            // Fire-and-forget spam check
+            (async () => {
+              try {
+                const { data: { session } } = await supabase.auth.getSession();
+                if (!session?.access_token) return;
+                await fetch(
+                  `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/moderate-content`,
+                  {
+                    method: 'POST',
+                    headers: {
+                      'Authorization': `Bearer ${session.access_token}`,
+                      'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                      postId: created.id,
+                      table: 'mentor_post',
+                      text: askedQuestion,
+                    }),
+                  }
+                );
+              } catch (modErr) {
+                console.error('[Community] Moderation failed:', modErr);
+              }
+            })();
+          } catch (saveErr) {
+            console.error('[Community] Save AI answer failed:', saveErr);
+          } finally {
+            setStreamingText("");
+            setLoading(false);
+          }
+        },
+        onError: (err) => {
+          console.error('[Community] Stream error:', err);
+          setError(err.message || 'AI is taking too long. Please try again.');
+          setStreamingText("");
+          setLoading(false);
+        },
+      });
     } catch (err) {
       console.error('[Community] Submit error:', err);
       setError(err.message || 'Failed to submit question. Please try again.');
-    } finally { 
-      setLoading(false); 
+      setStreamingText("");
+      setLoading(false);
     }
   };
 
@@ -126,33 +149,32 @@ Structure your answer:
   const regenerateAI = async (post, idx) => {
     setAiLoading(idx);
     setError(null);
+
+    // Clear this post's answer immediately
+    setPosts(prev => prev.map((p, i) => i === idx ? { ...p, ai_answer: "" } : p));
+
+    let fullAnswer = "";
     try {
-      const prompt = `You are PathFinder AI, a friendly and expert career guidance assistant for high school and college students.
-
-Answer this question in a helpful, encouraging, and detailed way:
-
-"${post.question}"
-
-You MUST:
-- Use markdown formatting (headings, bullet points, bold)
-- Be conversational and teen-friendly
-- Include specific examples, salary ranges, and education paths
-- Provide actionable next steps
-- NEVER say "varies" or "it depends" without giving specific context
-- If you don't know something, say "I'm not sure, but typically X or Y"
-
-Structure your answer:
-1. Direct answer to the question
-2. Key details (salary, education, skills)
-3. Pros and cons (if applicable)
-4. Next steps for the student
-5. Encouraging closing note`;
-
-      const aiRes = await invokeLLM({ prompt: prompt, query: prompt });
-      console.log('[Community] Regenerated AI:', aiRes);
-
-      const updated = await entities.MentorPost.update(post.id, { ai_answer: aiRes });
-      setPosts(prev => prev.map((p, i) => i === idx ? updated : p));
+      await invokeLLMStream({
+        prompt: COMMUNITY_PROMPT(post.question),
+        onToken: (text) => {
+          fullAnswer += text;
+          setPosts(prev => prev.map((p, i) => i === idx ? { ...p, ai_answer: fullAnswer } : p));
+        },
+        onDone: async (finalText) => {
+          const answerText = finalText || fullAnswer;
+          try {
+            const updated = await entities.MentorPost.update(post.id, { ai_answer: answerText });
+            setPosts(prev => prev.map((p, i) => i === idx ? updated : p));
+          } catch (err) {
+            console.error('[Community] Save regenerated answer failed:', err);
+          }
+        },
+        onError: (err) => {
+          console.error('[Community] Regenerate stream error:', err);
+          setError('Failed to regenerate AI answer.');
+        },
+      });
     } catch (err) {
       console.error('[Community] Regenerate error:', err);
       setError('Failed to regenerate AI answer.');
@@ -198,48 +220,59 @@ Structure your answer:
 
       <div className="space-y-4">
         {posts.length === 0 && <p className="text-center text-muted-foreground text-sm py-10">No questions yet — be the first!</p>}
-        {posts.map((post, idx) => (
-          <motion.div key={post.id} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.03 }}
-            className="bg-card border border-border rounded-xl overflow-hidden">
-            <div className="p-5">
-              <div className="flex items-center justify-between gap-3 mb-2">
-                <div className="flex items-center gap-2">
-                  <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-sm font-bold text-primary">
-                    {(post.author_name || "A")[0].toUpperCase()}
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold">{post.author_name || "Anonymous Student"}</p>
-                    <span className="text-[10px] bg-secondary px-2 py-0.5 rounded-md">{post.topic || "General"}</span>
-                  </div>
-                </div>
-                <button onClick={() => likePost(post, idx)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors">
-                  <ThumbsUp className="h-3.5 w-3.5" /> {post.likes || 0}
-                </button>
-              </div>
-              <p className="font-medium text-sm">{post.question}</p>
-            </div>
+        {posts.map((post, idx) => {
+          // Show streaming text for the most recent post if it's currently streaming
+          const isStreaming = loading && idx === 0 && streamingText;
+          const answerToShow = isStreaming ? streamingText : post.ai_answer;
 
-            {post.ai_answer && (
-              <div className="border-t border-border bg-gradient-to-br from-primary/5 to-accent/5 p-5">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-1.5">
-                    <Sparkles className="h-3.5 w-3.5 text-primary" />
-                    <span className="text-xs font-semibold text-primary">Collade AI</span>
+          return (
+            <motion.div key={post.id} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.03 }}
+              className="bg-card border border-border rounded-xl overflow-hidden">
+              <div className="p-5">
+                <div className="flex items-center justify-between gap-3 mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-sm font-bold text-primary">
+                      {(post.author_name || "A")[0].toUpperCase()}
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold">{post.author_name || "Anonymous Student"}</p>
+                      <span className="text-[10px] bg-secondary px-2 py-0.5 rounded-md">{post.topic || "General"}</span>
+                    </div>
                   </div>
-                  <button onClick={() => regenerateAI(post, idx)} disabled={aiLoading === idx}
-                    className="text-[11px] text-muted-foreground hover:text-primary transition-colors">
-                    {aiLoading === idx ? <Loader2 className="h-3 w-3 animate-spin" /> : "↻ Refresh"}
+                  <button onClick={() => likePost(post, idx)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors">
+                    <ThumbsUp className="h-3.5 w-3.5" /> {post.likes || 0}
                   </button>
                 </div>
-                <ReactMarkdown className="prose prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 prose-p:my-1">
-                  {post.ai_answer}
-                </ReactMarkdown>
+                <p className="font-medium text-sm">{post.question}</p>
               </div>
-            )}
 
-            <PostReplies postId={post.id} />
-          </motion.div>
-        ))}
+              {answerToShow && (
+                <div className="border-t border-border bg-gradient-to-br from-primary/5 to-accent/5 p-5">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-1.5">
+                      <Sparkles className="h-3.5 w-3.5 text-primary" />
+                      <span className="text-xs font-semibold text-primary">Collade AI</span>
+                      {isStreaming && (
+                        <span className="text-[10px] text-muted-foreground italic animate-pulse">
+                          typing...
+                        </span>
+                      )}
+                    </div>
+                    <button onClick={() => regenerateAI(post, idx)} disabled={aiLoading === idx || isStreaming}
+                      className="text-[11px] text-muted-foreground hover:text-primary transition-colors disabled:opacity-40">
+                      {aiLoading === idx ? <Loader2 className="h-3 w-3 animate-spin" /> : "↻ Refresh"}
+                    </button>
+                  </div>
+                  <ReactMarkdown className="prose prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 prose-p:my-1">
+                    {answerToShow}
+                  </ReactMarkdown>
+                </div>
+              )}
+
+              <PostReplies postId={post.id} />
+            </motion.div>
+          );
+        })}
       </div>
     </div>
     </PullToRefresh>
