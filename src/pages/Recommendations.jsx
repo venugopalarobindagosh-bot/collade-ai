@@ -1,13 +1,11 @@
-import { useState } from "react";
-import { Zap, ArrowRight, Sparkles, Shield, Target } from "lucide-react";
-import ReactMarkdown from "react-markdown";
+import { useState, useRef } from "react";
+import { Zap, ArrowRight, Sparkles, Loader2, ChevronRight } from "lucide-react";
 import { useCredits } from "@/hooks/useCredits";
-import { invokeLLM } from "@/api/llm";
-import { parseAIResponse, extractArray } from "@/lib/aiResponseHandler";
+import { invokeLLMStream } from "@/api/llm";
 import SectionHeader from "../components/SectionHeader";
-import CareerCard from "../components/CareerCard";
-import LoadingGrid from "../components/LoadingGrid";
 import { motion } from "framer-motion";
+import { useNavigate } from "react-router-dom";
+import SmartMarkdown from "../components/SmartMarkdown";
 
 const INTEREST_OPTIONS = [
   "Technology", "Science", "Arts", "Business", "Healthcare", "Education",
@@ -30,15 +28,17 @@ const SALARY_OPTIONS = [
 
 export default function Recommendations() {
   const { deductCredit } = useCredits();
+  const navigate = useNavigate();
   const [step, setStep] = useState(1);
   const [interests, setInterests] = useState([]);
   const [skills, setSkills] = useState([]);
   const [salary, setSalary] = useState("");
   const [dreamLocation, setDreamLocation] = useState("");
-  const [results, setResults] = useState(null);
-  const [markdownFallback, setMarkdownFallback] = useState("");
+  const [streamedText, setStreamedText] = useState("");
+  const [parsedItems, setParsedItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const scrollRef = useRef(null);
 
   const toggleItem = (item, list, setList) => {
     if (list.includes(item)) setList(list.filter((i) => i !== item));
@@ -53,58 +53,106 @@ export default function Recommendations() {
     }
 
     setLoading(true);
+    setStreamedText("");
+    setParsedItems([]);
     setError(null);
-    setMarkdownFallback("");
+
+    const salaryLabel = SALARY_OPTIONS.find(s => s.value === salary)?.label || salary;
+
+    const prompt = `You are Collade AI, an expert career intelligence assistant.
+
+Based on this student profile, write a HIGHLY DETAILED personalized analysis, then list 12 matched careers.
+
+STUDENT PROFILE:
+- Interests: ${interests.join(", ")}
+- Strengths: ${skills.join(", ")}
+- Salary expectation: ${salaryLabel}
+- Dream location: ${dreamLocation || "Flexible / Global"}
+
+=== PART 1: PERSONALIZED ANALYSIS ===
+
+Write 3-4 paragraphs covering:
+- What kind of thinker/worker this student is based on their profile
+- Which industries and roles best suit this combination of interests + skills
+- What salary path is realistic given their expectations
+- What they should focus on next
+
+Then 6-8 "Personalized Insights" bullets with specific observations about THEIR profile.
+
+Then 5 "Skills to Develop" bullets.
+
+Then 4-5 "Best Fit Industries" bullets.
+
+=== PART 2: MATCHED CAREERS ===
+
+After the guide, write EXACTLY this marker on its own line:
+
+[ CAREER CARDS ]
+
+Then list 12 careers matched to this profile, EACH in this EXACT format:
+
+Career Name Here
+Stream: Specific field
+Duration: X years · Level: Undergraduate/Postgraduate/Certification
+Salary: ₹X-Y LPA (India) | $X-Y USD (Global)
+AI Impact: Low/Medium/High · Growth: High/Medium
+[2-3 sentence description explaining why THIS career fits THIS profile]
+
+(blank line between each career)
+
+RULES:
+- Reference their actual interests and skills in the descriptions
+- REAL numbers with currency
+- NEVER say "varies"
+- Plain text format, no markdown symbols
+- Use [ CAREER CARDS ] as the exact marker`;
 
     try {
-      const prompt = `Based on this student profile, give the TOP 10 best career path recommendations:
-
-Interests: ${interests.join(", ")}
-Skills: ${skills.join(", ")}
-Salary Expectation: ${salary}
-Dream Location: ${dreamLocation || "Flexible / Global"}
-
-Return a JSON object with:
-- recommendations (array of: name, stream, level, duration, short_description, why_it_fits, future_proof_score, risk_reward, salary_range, ai_impact, growth, locations, skills_to_develop (array), education_path)
-- overall_insight (string)
-
-IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
-
-      const response = await invokeLLM({ prompt, query: prompt });
-      console.log('[Recommendations] Raw response:', response);
-
-      const parsed = parseAIResponse(response);
-      console.log('[Recommendations] Parsed type:', parsed.type);
-
-      if (parsed.type === 'json' && parsed.data) {
-        const recs = extractArray(parsed.data, ['recommendations', 'careers', 'results']);
-        setResults({
-          recommendations: recs,
-          overall_insight: parsed.data.overall_insight || "",
-        });
-        if (recs.length === 0) setMarkdownFallback(parsed.raw);
-      } else if (parsed.type === 'markdown') {
-        setMarkdownFallback(parsed.raw);
-      } else {
-        setError("No recommendations returned. Please try again.");
-      }
+      let buffer = "";
+      await invokeLLMStream({
+        prompt,
+        onToken: (text) => {
+          buffer += text;
+          setStreamedText(buffer);
+          if (buffer.includes("[ CAREER CARDS ]")) {
+            const items = extractCareersFromMarker(buffer);
+            if (items.length > 0) setParsedItems(items);
+          }
+          if (scrollRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+          }
+        },
+        onDone: () => setLoading(false),
+        onError: (err) => {
+          console.error('[Recommendations] Error:', err);
+          setError(err.message || 'Failed to get recommendations.');
+          setLoading(false);
+        },
+      });
     } catch (err) {
-      console.error('[Recommendations] Error:', err);
-      setError(err.message || 'Failed to get recommendations. Please try again.');
-    } finally {
+      console.error('[Recommendations] Catch error:', err);
+      setError(err.message || 'Failed to get recommendations.');
       setLoading(false);
     }
   };
 
   const reset = () => {
-    setResults(null);
-    setMarkdownFallback("");
+    setStreamedText("");
+    setParsedItems([]);
     setStep(1);
     setInterests([]);
     setSkills([]);
     setSalary("");
     setDreamLocation("");
+    setError(null);
   };
+
+  const openCareerDetail = (careerName) => {
+    navigate(`/career-detail?name=${encodeURIComponent(careerName)}`);
+  };
+
+  const guideText = streamedText.split("[ CAREER CARDS ]")[0] || "";
+  const showForm = !loading && !streamedText;
 
   return (
     <div className="space-y-6">
@@ -120,7 +168,7 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and
         </div>
       )}
 
-      {!loading && !results && !markdownFallback && (
+      {showForm && (
         <div className="bg-card border border-border rounded-xl p-5 space-y-6">
           <div className="flex items-center gap-2">
             {[1, 2, 3, 4].map((s) => (
@@ -256,73 +304,143 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and
         </div>
       )}
 
-      {loading && <LoadingGrid text="AI is crafting your personalized recommendations..." />}
-
-      {!loading && results && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-          {results.overall_insight && (
-            <div className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-xl p-5">
-              <div className="flex items-center gap-2 mb-2">
-                <Target className="h-4 w-4 text-primary" />
-                <p className="text-sm font-semibold">AI Insight</p>
-              </div>
-              <p className="text-sm text-muted-foreground">{results.overall_insight}</p>
-            </div>
-          )}
-
-          <button onClick={reset} className="text-sm text-primary font-medium hover:underline">← Start over</button>
-
-          {results.recommendations?.length > 0 && (
-            <div className="space-y-4">
-              {results.recommendations.map((rec, i) => (
-                <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
-                  className="bg-card border border-border rounded-xl p-5 space-y-3">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-xs font-bold bg-primary text-primary-foreground px-2 py-0.5 rounded-md">#{i + 1}</span>
-                    {rec.future_proof_score && (
-                      <span className="text-xs font-medium bg-accent/10 text-accent px-2 py-0.5 rounded-md flex items-center gap-1">
-                        <Shield className="h-3 w-3" /> Future-proof: {rec.future_proof_score}
-                      </span>
-                    )}
-                  </div>
-                  <CareerCard career={rec} index={i} />
-                  {rec.why_it_fits && (
-                    <div className="pl-4 border-l-2 border-primary/30">
-                      <p className="text-xs font-semibold text-primary">Why this fits you:</p>
-                      <p className="text-sm text-muted-foreground mt-0.5">{rec.why_it_fits}</p>
-                    </div>
-                  )}
-                  {rec.risk_reward && <p className="text-xs text-muted-foreground"><span className="font-semibold">Risk vs Reward:</span> {rec.risk_reward}</p>}
-                  {rec.education_path && <p className="text-xs text-muted-foreground"><span className="font-semibold">Education Path:</span> {rec.education_path}</p>}
-                  {rec.skills_to_develop?.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {rec.skills_to_develop.map((skill, j) => (
-                        <span key={j} className="text-[11px] bg-secondary px-2 py-1 rounded-md">{skill}</span>
-                      ))}
-                    </div>
-                  )}
-                </motion.div>
-              ))}
-            </div>
-          )}
-        </motion.div>
-      )}
-
-      {!loading && markdownFallback && !results && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
-          <button onClick={reset} className="text-sm text-primary font-medium hover:underline">← Start over</button>
-          <div className="bg-card border border-border rounded-xl p-6 prose prose-invert prose-sm max-w-none
-            prose-headings:text-foreground prose-headings:font-bold
-            prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2
-            prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
-            prose-p:text-muted-foreground prose-p:my-1.5
-            prose-li:text-muted-foreground prose-li:my-0.5
-            prose-strong:text-foreground
-          ">
-            <ReactMarkdown>{markdownFallback}</ReactMarkdown>
+      {loading && !streamedText && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-2xl p-6 text-center"
+        >
+          <div className="flex items-center justify-center gap-2">
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            <p className="font-heading font-semibold text-primary">🎯 Crafting your personalized recommendations...</p>
           </div>
         </motion.div>
       )}
+
+      {guideText && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="bg-card border border-border rounded-2xl p-6 sm:p-8"
+        >
+          <SmartMarkdown text={guideText} />
+          {loading && !streamedText.includes("[ CAREER CARDS ]") && (
+            <div className="flex items-center gap-2 mt-4 pt-4 border-t border-border">
+              <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+              <span className="text-xs text-muted-foreground italic">writing...</span>
+            </div>
+          )}
+        </motion.div>
+      )}
+
+      {parsedItems.length > 0 && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-foreground">
+              🎯 {parsedItems.length} careers matched to your profile
+              {loading && <span className="text-primary italic"> (streaming...)</span>}
+            </p>
+            {loading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
+          </div>
+          <div className="grid sm:grid-cols-2 gap-3">
+            {parsedItems.map((career, i) => (
+              <motion.button
+                key={i}
+                initial={{ opacity: 0, y: 15, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ duration: 0.3, delay: i * 0.03 }}
+                onClick={() => openCareerDetail(career.name)}
+                className="text-left bg-card border border-border rounded-xl p-4 hover:border-primary/50 hover:shadow-md transition-all group"
+              >
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <h3 className="font-heading font-bold text-base group-hover:text-primary transition-colors">{career.name}</h3>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-primary shrink-0 mt-0.5" />
+                </div>
+                <div className="space-y-1.5 text-xs">
+                  {career.duration && (
+                    <p className="text-muted-foreground"><span className="font-medium text-foreground">Duration:</span> {career.duration}</p>
+                  )}
+                  {career.salary && (
+                    <p className="text-muted-foreground"><span className="font-medium text-foreground">Salary:</span> {career.salary}</p>
+                  )}
+                  {career.tags?.length > 0 && (
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {career.tags.map((tag, j) => (
+                        <span key={j} className="text-[10px] bg-secondary px-2 py-0.5 rounded-md font-medium">{tag}</span>
+                      ))}
+                    </div>
+                  )}
+                  {career.description && (
+                    <p className="text-muted-foreground line-clamp-2 pt-1">{career.description}</p>
+                  )}
+                </div>
+              </motion.button>
+            ))}
+          </div>
+        </motion.div>
+      )}
+
+      {streamedText && !loading && (
+        <div className="text-center">
+          <button onClick={reset} className="text-sm text-primary font-medium hover:underline">
+            ← Start over
+          </button>
+        </div>
+      )}
     </div>
   );
+}
+
+function extractCareersFromMarker(text) {
+  const markerIdx = text.indexOf("[ CAREER CARDS ]");
+  if (markerIdx === -1) return [];
+  const block = text.slice(markerIdx + "[ CAREER CARDS ]".length);
+  const lines = block.split("\n").map(l => l.trim());
+  const items = [];
+  let current = null;
+  let paragraphs = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+    const isKey = /^(Stream|Duration|Salary|AI Impact|Level)\s*:/i.test(line);
+    const isBullet = line.startsWith("-") || line.startsWith("•") || /^\d+\./.test(line);
+
+    if (!isKey && !isBullet && line.length < 80 && !line.endsWith(".")) {
+      if (current && (current.salary || current.duration)) {
+        current.description = paragraphs.join(" ").trim();
+        items.push(current);
+      }
+      current = { name: line, duration: "", salary: "", tags: [], description: "" };
+      paragraphs = [];
+      continue;
+    }
+    if (!current) continue;
+
+    const streamMatch = line.match(/^Stream:\s*(.+)/i);
+    if (streamMatch) { current.tags.push(streamMatch[1].trim()); continue; }
+
+    const durationMatch = line.match(/^Duration:\s*([^·]+?)(?:\s*·\s*Level:\s*(.+))?$/i);
+    if (durationMatch) {
+      current.duration = durationMatch[1].trim();
+      if (durationMatch[2]) current.tags.push(durationMatch[2].trim());
+      continue;
+    }
+    const salaryMatch = line.match(/^Salary:\s*(.+)/i);
+    if (salaryMatch) { current.salary = salaryMatch[1].trim(); continue; }
+
+    const aiMatch = line.match(/^AI Impact:\s*([^·]+?)(?:\s*·\s*Growth:\s*(.+))?$/i);
+    if (aiMatch) {
+      current.tags.push("AI: " + aiMatch[1].trim());
+      if (aiMatch[2]) current.tags.push("Growth: " + aiMatch[2].trim());
+      continue;
+    }
+    paragraphs.push(line);
+  }
+
+  if (current && (current.salary || current.duration)) {
+    current.description = paragraphs.join(" ").trim();
+    items.push(current);
+  }
+  return items;
 }
