@@ -40,7 +40,7 @@ export default function ExploreDegrees() {
     setError(null);
 
     try {
-      const prompt = `You are a comprehensive career guidance database. List 12 diverse degrees/programs at the ${level} level in the ${stream} stream.
+      const prompt = `You are a comprehensive career guidance database. List 8 diverse degrees/programs at the ${level} level in the ${stream} stream.
 
 For each, provide detailed info. Include mainstream AND niche/emerging programs. Cover global options.
 
@@ -58,7 +58,12 @@ Return a JSON object with a "degrees" array. Each degree should have:
 - required_subjects (array of strings)
 - entrance_exams (array of strings)
 
-IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
+CRITICAL RULES:
+- Return EXACTLY 8 degrees, no more, no less
+- Return ONLY valid JSON. No markdown, no code fences, no text before or after
+- Keep each degree's text concise (1-2 sentences per field)
+- Start with { and end with }
+- The response MUST be complete and parseable as JSON`;
 
       const response = await invokeLLM({ prompt, query: prompt });
       console.log('[ExploreDegrees] Raw response:', response);
@@ -113,7 +118,7 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and
     setSelectedStream(null);
 
     try {
-      const prompt = `Search for degrees, courses, and programs related to: "${searchQuery}". Return 10 diverse results across all levels and streams globally.
+      const prompt = `Search for degrees, courses, and programs related to: "${searchQuery}". Return 8 diverse results across all levels and streams globally.
 
 Return a JSON object with a "degrees" array. Each degree should have:
 - name (string)
@@ -127,7 +132,11 @@ Return a JSON object with a "degrees" array. Each degree should have:
 - growth (string)
 - locations (array of strings)
 
-IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
+CRITICAL RULES:
+- Return EXACTLY 8 degrees, no more, no less
+- Return ONLY valid JSON. No markdown, no code fences
+- Keep each degree's text concise
+- Start with { and end with }`;
 
       const response = await invokeLLM({ prompt, query: prompt });
       console.log('[ExploreDegrees] Search response:', response);

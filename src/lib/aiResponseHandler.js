@@ -4,6 +4,11 @@
  * Handles both JSON and markdown responses from the AI edge function.
  * Prevents blank pages when AI returns markdown instead of structured JSON.
  *
+ * Includes:
+ * - JSON extraction from raw text
+ * - Truncated JSON repair
+ * - Artifact stripping (response:, answer:, code fences)
+ *
  * Usage:
  *   const parsed = parseAIResponse(rawResponse);
  *   if (parsed.type === 'json') → render structured cards using parsed.data
@@ -11,40 +16,97 @@
  */
 
 /**
- * Try to extract a JSON object or array from a string.
- * Handles:
- * - Plain JSON responses: `{...}` or `[...]`
- * - JSON wrapped in markdown code fences: ```json\n{...}\n```
- * - JSON preceded/followed by prose
+ * Repair truncated JSON by:
+ * 1. Trimming back to last complete object in array
+ * 2. Closing open brackets/braces
  */
+function repairTruncatedJSON(str) {
+  if (!str || typeof str !== 'string') return null;
+
+  try {
+    const startIdx = str.indexOf('{');
+    if (startIdx === -1) return null;
+
+    let s = str.slice(startIdx);
+
+    const lastCompleteObj = s.lastIndexOf('},');
+    const lastCompleteArr = s.lastIndexOf('}]');
+
+    let cutoff = Math.max(lastCompleteObj, lastCompleteArr);
+
+    if (cutoff > 0) {
+      s = s.slice(0, cutoff + 1);
+
+      const opens = (s.match(/\{/g) || []).length;
+      const closes = (s.match(/\}/g) || []).length;
+      for (let i = 0; i < opens - closes; i++) s += '}';
+
+      const arrOpens = (s.match(/\[/g) || []).length;
+      const arrCloses = (s.match(/\]/g) || []).length;
+      for (let i = 0; i < arrOpens - arrCloses; i++) s += ']';
+
+      try {
+        const repaired = JSON.parse(s);
+        if (repaired && typeof repaired === 'object') {
+          console.log('[aiResponseHandler] Repaired truncated JSON successfully');
+          return repaired;
+        }
+      } catch {}
+    }
+
+    const objPattern = /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g;
+    const matches = s.match(objPattern) || [];
+    if (matches.length > 0) {
+      const degreesPattern = /"degrees"\s*:\s*\[/;
+      if (degreesPattern.test(s)) {
+        const salvaged = matches.map(m => {
+          try { return JSON.parse(m); } catch { return null; }
+        }).filter(Boolean);
+
+        if (salvaged.length > 0) {
+          console.log(`[aiResponseHandler] Salvaged ${salvaged.length} objects from truncated JSON`);
+          return { degrees: salvaged };
+        }
+      }
+    }
+
+    return null;
+  } catch (err) {
+    console.error('[aiResponseHandler] Repair failed:', err);
+    return null;
+  }
+}
+
 function tryExtractJSON(raw) {
   if (!raw || typeof raw !== 'string') return null;
 
-  // 1. Try direct parse (rarely works but cheap)
   try {
     const direct = JSON.parse(raw);
     if (direct && typeof direct === 'object') return direct;
   } catch {}
 
-  // 2. Strip markdown code fences: ```json ... ``` or ``` ... ```
   const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fenceMatch) {
     try {
       const fenced = JSON.parse(fenceMatch[1].trim());
       if (fenced && typeof fenced === 'object') return fenced;
-    } catch {}
+    } catch {
+      const repaired = repairTruncatedJSON(fenceMatch[1]);
+      if (repaired) return repaired;
+    }
   }
 
-  // 3. Find first { ... } that parses as valid JSON
   const objMatch = raw.match(/\{[\s\S]*\}/);
   if (objMatch) {
     try {
       const obj = JSON.parse(objMatch[0]);
       if (obj && typeof obj === 'object') return obj;
-    } catch {}
+    } catch {
+      const repaired = repairTruncatedJSON(objMatch[0]);
+      if (repaired) return repaired;
+    }
   }
 
-  // 4. Find first [ ... ] that parses as valid JSON
   const arrMatch = raw.match(/\[[\s\S]*\]/);
   if (arrMatch) {
     try {
@@ -56,25 +118,12 @@ function tryExtractJSON(raw) {
   return null;
 }
 
-/**
- * Main handler — returns a consistent shape regardless of AI output format.
- *
- * Returns: {
- *   type: 'json' | 'markdown' | 'empty',
- *   data: object|array|null,   // parsed JSON if available
- *   raw: string,               // original string
- *   isEmpty: boolean,          // true if nothing useful to display
- * }
- */
 export function parseAIResponse(rawResponse) {
-  // Handle null/undefined
   if (rawResponse == null) {
     return { type: 'empty', data: null, raw: '', isEmpty: true };
   }
 
-  // If AI already returned an object (invokeLLM parsed it)
   if (typeof rawResponse === 'object') {
-    // Check if the object is meaningful
     const isEmpty =
       !rawResponse ||
       (Array.isArray(rawResponse) && rawResponse.length === 0) ||
@@ -89,18 +138,15 @@ export function parseAIResponse(rawResponse) {
     };
   }
 
-  // It's a string
   const raw = String(rawResponse).trim();
 
   if (!raw) {
     return { type: 'empty', data: null, raw: '', isEmpty: true };
   }
 
-  // Try to extract JSON
   const jsonData = tryExtractJSON(raw);
 
   if (jsonData) {
-    // Check if extracted data is meaningful
     const isEmpty =
       (Array.isArray(jsonData) && jsonData.length === 0) ||
       (typeof jsonData === 'object' &&
@@ -111,26 +157,25 @@ export function parseAIResponse(rawResponse) {
     }
   }
 
-  // Not JSON — return as markdown
-  return { type: 'markdown', data: null, raw, isEmpty: false };
+  // Clean common AI artifacts before returning markdown
+  let cleaned = raw
+    .replace(/^(response|answer|result)\s*:\s*/i, '')
+    .replace(/^```\w*\n?/, '')
+    .replace(/\n?```$/, '')
+    .trim();
+
+  return { type: 'markdown', data: null, raw: cleaned, isEmpty: false };
 }
 
-/**
- * Convenience helper — tries multiple possible keys for an array in JSON data.
- * Many AI responses use different keys: "matches", "results", "items", "data", "careers", etc.
- */
 export function extractArray(data, preferredKeys = []) {
   if (!data) return [];
 
-  // Direct array
   if (Array.isArray(data)) return data;
 
-  // Try preferred keys first
   for (const key of preferredKeys) {
     if (Array.isArray(data[key])) return data[key];
   }
 
-  // Try common fallback keys
   const commonKeys = [
     'matches', 'results', 'items', 'data', 'careers', 'degrees',
     'trends', 'recommendations', 'opportunities', 'paths', 'list', 'entries',
@@ -139,10 +184,10 @@ export function extractArray(data, preferredKeys = []) {
     if (Array.isArray(data[key])) return data[key];
   }
 
-  // If data has exactly one array value, return it
   const arrayValues = Object.values(data).filter(Array.isArray);
   if (arrayValues.length === 1) return arrayValues[0];
 
-  // Nothing found
   return [];
 }
+
+export { repairTruncatedJSON };
