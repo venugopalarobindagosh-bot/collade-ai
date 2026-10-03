@@ -1,14 +1,12 @@
-import { useState } from "react";
-import { Sparkles, X, Plus, ArrowRight } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import { invokeLLM } from "@/api/llm";
+import { useState, useRef } from "react";
+import { Sparkles, X, Plus, Loader2, ChevronRight } from "lucide-react";
+import { invokeLLMStream } from "@/api/llm";
 import { useCredits } from "@/hooks/useCredits";
-import { parseAIResponse, extractArray } from "@/lib/aiResponseHandler";
 import FeatureGate from "../components/FeatureGate";
 import SectionHeader from "../components/SectionHeader";
-import CareerCard from "../components/CareerCard";
-import LoadingGrid from "../components/LoadingGrid";
 import { motion, AnimatePresence } from "framer-motion";
+import { useNavigate } from "react-router-dom";
+import SmartMarkdown from "../components/SmartMarkdown";
 
 const SUGGESTIONS = [
   "Drawing", "Coding", "Cooking", "Photography", "Writing", "Music", "Dancing",
@@ -20,12 +18,14 @@ const SUGGESTIONS = [
 
 export default function InterestMatcher() {
   const { deductCredit } = useCredits();
+  const navigate = useNavigate();
   const [interests, setInterests] = useState([]);
   const [inputVal, setInputVal] = useState("");
-  const [results, setResults] = useState([]);
-  const [markdownFallback, setMarkdownFallback] = useState("");
+  const [streamedText, setStreamedText] = useState("");
+  const [parsedItems, setParsedItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const scrollRef = useRef(null);
 
   const addInterest = (interest) => {
     if (interest && !interests.includes(interest) && interests.length < 10) {
@@ -41,7 +41,6 @@ export default function InterestMatcher() {
   const findMatches = async () => {
     if (interests.length === 0) return;
 
-    setError(null);
     const ok = await deductCredit();
     if (!ok) {
       window.dispatchEvent(new CustomEvent("collade:upgrade"));
@@ -49,55 +48,90 @@ export default function InterestMatcher() {
     }
 
     setLoading(true);
-    setResults([]);
-    setMarkdownFallback("");
+    setStreamedText("");
+    setParsedItems([]);
+    setError(null);
+
+    const prompt = `You are Collade AI, an expert career intelligence assistant.
+
+A student has these interests/hobbies: ${interests.join(", ")}.
+
+Write a HIGHLY DETAILED personalized career analysis, then list 12 matched careers.
+
+=== PART 1: PERSONALIZED ANALYSIS ===
+
+Write 3-4 paragraphs covering:
+- What these interests reveal about the student's personality and work style
+- Which industries and role types align with this profile
+- Creative combinations they might not have considered
+- How these interests translate to real-world careers in 2025-2030
+
+Then 6-8 "Personalized Insights" bullets with specific observations tied to THEIR interests.
+
+Then 5 "Unique Career Angles" bullets — unconventional paths worth exploring.
+
+Then 4-5 "Skills to Build" bullets tied to their interests.
+
+=== PART 2: MATCHED CAREERS ===
+
+After the guide, write EXACTLY this marker on its own line:
+
+[ CAREER CARDS ]
+
+Then list 12 careers matched to these interests, EACH in this EXACT format:
+
+Career Name Here
+Stream: Specific field
+Duration: X years · Level: Undergraduate/Postgraduate/Certification
+Salary: ₹X-Y LPA (India) | $X-Y USD (Global)
+AI Impact: Low/Medium/High · Growth: High/Medium
+[2-3 sentence description explaining why THIS career fits someone with these interests]
+
+(blank line between each career)
+
+RULES:
+- Reference their actual interests in descriptions
+- Mix mainstream + niche + emerging paths
+- REAL numbers with currency
+- NEVER say "varies"
+- Plain text format, no markdown symbols
+- Use [ CAREER CARDS ] as the exact marker`;
 
     try {
-      const prompt = `A student has the following interests and hobbies: ${interests.join(", ")}.
-
-Based on these interests, suggest 10 diverse and creative career paths, degrees, diplomas, and certifications that would be an excellent fit. Include mainstream options, niche/unconventional paths, emerging fields, and options at different education levels.
-
-Return a JSON object with a "matches" array. Each match should have:
-- name (string)
-- stream (string)
-- level (string)
-- duration (string)
-- short_description (string)
-- why_it_fits (string)
-- salary_range (string)
-- ai_impact (string: "High", "Medium", or "Low")
-- growth (string)
-- locations (array of strings)
-- skills_needed (array of strings)
-- future_proof_score (string)
-
-IMPORTANT: Return ONLY valid JSON. No markdown, no code fences, no explanation. Start your response with { and end with }.`;
-
-      const response = await invokeLLM({ prompt, query: prompt });
-      console.log('[InterestMatcher] Raw response:', response);
-
-      const parsed = parseAIResponse(response);
-      console.log('[InterestMatcher] Parsed type:', parsed.type);
-
-      if (parsed.type === 'json') {
-        const matches = extractArray(parsed.data, ['matches', 'careers', 'results']);
-        console.log('[InterestMatcher] Extracted matches:', matches.length);
-        setResults(matches);
-        if (matches.length === 0) {
-          setMarkdownFallback(parsed.raw);
-        }
-      } else if (parsed.type === 'markdown') {
-        setMarkdownFallback(parsed.raw);
-      } else {
-        setError('No results returned. Please try again.');
-      }
-    } catch (error) {
-      console.error('[InterestMatcher] Error:', error);
-      setError(error.message || 'Failed to find career matches. Please try again.');
-    } finally {
+      let buffer = "";
+      await invokeLLMStream({
+        prompt,
+        onToken: (text) => {
+          buffer += text;
+          setStreamedText(buffer);
+          if (buffer.includes("[ CAREER CARDS ]")) {
+            const items = extractCareersFromMarker(buffer);
+            if (items.length > 0) setParsedItems(items);
+          }
+          if (scrollRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+          }
+        },
+        onDone: () => setLoading(false),
+        onError: (err) => {
+          console.error('[InterestMatcher] Error:', err);
+          setError(err.message || 'Failed to find career matches. Please try again.');
+          setLoading(false);
+        },
+      });
+    } catch (err) {
+      console.error('[InterestMatcher] Catch error:', err);
+      setError(err.message || 'Failed to find career matches.');
       setLoading(false);
     }
   };
+
+  const openCareerDetail = (careerName) => {
+    navigate(`/career-detail?name=${encodeURIComponent(careerName)}&stream=${encodeURIComponent(interests.join(", "))}`);
+  };
+
+  const guideText = streamedText.split("[ CAREER CARDS ]")[0] || "";
+  const showForm = !streamedText;
 
   return (
     <FeatureGate onUpgrade={() => {}}>
@@ -108,75 +142,76 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no code fences, no explanation. 
         icon={Sparkles}
       />
 
-      <div className="bg-card border border-border rounded-xl p-5 space-y-4">
-        <div className="flex items-center gap-2">
-          <input
-            value={inputVal}
-            onChange={(e) => setInputVal(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") addInterest(inputVal.trim());
-            }}
-            placeholder="Type an interest or hobby and press Enter..."
-            className="flex-1 bg-secondary rounded-lg px-3.5 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-          />
+      {showForm && (
+        <div className="bg-card border border-border rounded-xl p-5 space-y-4">
+          <div className="flex items-center gap-2">
+            <input
+              value={inputVal}
+              onChange={(e) => setInputVal(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") addInterest(inputVal.trim());
+              }}
+              placeholder="Type an interest or hobby and press Enter..."
+              className="flex-1 bg-secondary rounded-lg px-3.5 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+            <button
+              onClick={() => addInterest(inputVal.trim())}
+              className="h-10 w-10 rounded-lg bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          </div>
+
+          <AnimatePresence>
+            {interests.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                className="flex flex-wrap gap-2"
+              >
+                {interests.map((interest) => (
+                  <motion.span
+                    key={interest}
+                    initial={{ scale: 0 }}
+                    animate={{ scale: 1 }}
+                    exit={{ scale: 0 }}
+                    className="inline-flex items-center gap-1.5 bg-primary/10 text-primary px-3 py-1.5 rounded-full text-sm font-medium"
+                  >
+                    {interest}
+                    <button onClick={() => removeInterest(interest)} className="hover:bg-primary/20 rounded-full p-0.5">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </motion.span>
+                ))}
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <div>
+            <p className="text-xs text-muted-foreground mb-2">Quick add:</p>
+            <div className="flex flex-wrap gap-1.5">
+              {SUGGESTIONS.filter((s) => !interests.includes(s)).slice(0, 15).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => addInterest(s)}
+                  className="text-xs bg-secondary text-secondary-foreground px-2.5 py-1 rounded-md hover:bg-primary/10 hover:text-primary transition-colors"
+                >
+                  + {s}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <button
-            onClick={() => addInterest(inputVal.trim())}
-            className="h-10 w-10 rounded-lg bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90"
+            onClick={findMatches}
+            disabled={interests.length === 0 || loading}
+            className="w-full bg-primary text-primary-foreground py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 hover:opacity-90 disabled:opacity-40 transition-opacity shadow-lg shadow-primary/20"
           >
-            <Plus className="h-4 w-4" />
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            Find My Career Matches ({interests.length} interest{interests.length !== 1 ? "s" : ""})
           </button>
         </div>
-
-        <AnimatePresence>
-          {interests.length > 0 && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: "auto" }}
-              className="flex flex-wrap gap-2"
-            >
-              {interests.map((interest) => (
-                <motion.span
-                  key={interest}
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                  exit={{ scale: 0 }}
-                  className="inline-flex items-center gap-1.5 bg-primary/10 text-primary px-3 py-1.5 rounded-full text-sm font-medium"
-                >
-                  {interest}
-                  <button onClick={() => removeInterest(interest)} className="hover:bg-primary/20 rounded-full p-0.5">
-                    <X className="h-3 w-3" />
-                  </button>
-                </motion.span>
-              ))}
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <div>
-          <p className="text-xs text-muted-foreground mb-2">Quick add:</p>
-          <div className="flex flex-wrap gap-1.5">
-            {SUGGESTIONS.filter((s) => !interests.includes(s)).slice(0, 15).map((s) => (
-              <button
-                key={s}
-                onClick={() => addInterest(s)}
-                className="text-xs bg-secondary text-secondary-foreground px-2.5 py-1 rounded-md hover:bg-primary/10 hover:text-primary transition-colors"
-              >
-                + {s}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <button
-          onClick={findMatches}
-          disabled={interests.length === 0 || loading}
-          className="w-full bg-primary text-primary-foreground py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 hover:opacity-90 disabled:opacity-40 transition-opacity shadow-lg shadow-primary/20"
-        >
-          <Sparkles className="h-4 w-4" />
-          Find My Career Matches ({interests.length} interest{interests.length !== 1 ? "s" : ""})
-          <ArrowRight className="h-4 w-4" />
-        </button>
-      </div>
+      )}
 
       {error && (
         <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4 text-destructive">
@@ -184,59 +219,152 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no code fences, no explanation. 
         </div>
       )}
 
-      {loading && <LoadingGrid text="AI is analyzing your interests..." />}
-
-      {!loading && results.length > 0 && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            <span className="font-semibold text-foreground">{results.length} matches</span> found for your interests
-          </p>
-          {results.map((match, i) => (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.05 }}
-            >
-              <div className="bg-card border border-border rounded-xl p-5 space-y-3">
-                <CareerCard career={match} index={i} />
-                {match.why_it_fits && (
-                  <div className="ml-1 pl-4 border-l-2 border-primary/30">
-                    <p className="text-xs font-semibold text-primary">Why this fits you:</p>
-                    <p className="text-sm text-muted-foreground mt-0.5">{match.why_it_fits}</p>
-                  </div>
-                )}
-                {match.future_proof_score && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] font-medium bg-accent/10 text-accent px-2 py-1 rounded-md">
-                      Future-proof: {match.future_proof_score}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          ))}
+      {loading && !streamedText && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-2xl p-6 text-center"
+        >
+          <div className="flex items-center justify-center gap-2">
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            <p className="font-heading font-semibold text-primary">✨ Analyzing your interests...</p>
+          </div>
         </motion.div>
       )}
 
-      {!loading && markdownFallback && results.length === 0 && (
+      {guideText && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="bg-card border border-border rounded-2xl p-6 sm:p-8"
+        >
+          <SmartMarkdown text={guideText} />
+          {loading && !streamedText.includes("[ CAREER CARDS ]") && (
+            <div className="flex items-center gap-2 mt-4 pt-4 border-t border-border">
+              <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+              <span className="text-xs text-muted-foreground italic">writing...</span>
+            </div>
+          )}
+        </motion.div>
+      )}
+
+      {parsedItems.length > 0 && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            Career matches for <span className="font-semibold text-foreground">your interests</span>:
-          </p>
-          <div className="bg-card border border-border rounded-xl p-6 prose prose-invert prose-sm max-w-none
-            prose-headings:text-foreground prose-headings:font-bold
-            prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2
-            prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
-            prose-p:text-muted-foreground prose-p:my-1.5
-            prose-li:text-muted-foreground prose-li:my-0.5
-            prose-strong:text-foreground
-          ">
-            <ReactMarkdown>{markdownFallback}</ReactMarkdown>
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-foreground">
+              🎯 {parsedItems.length} careers matched to your interests
+              {loading && <span className="text-primary italic"> (streaming...)</span>}
+            </p>
+            {loading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
+          </div>
+          <div className="grid sm:grid-cols-2 gap-3">
+            {parsedItems.map((career, i) => (
+              <motion.button
+                key={i}
+                initial={{ opacity: 0, y: 15, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ duration: 0.3, delay: i * 0.03 }}
+                onClick={() => openCareerDetail(career.name)}
+                className="text-left bg-card border border-border rounded-xl p-4 hover:border-primary/50 hover:shadow-md transition-all group"
+              >
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <h3 className="font-heading font-bold text-base group-hover:text-primary transition-colors">{career.name}</h3>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-primary shrink-0 mt-0.5" />
+                </div>
+                <div className="space-y-1.5 text-xs">
+                  {career.duration && (
+                    <p className="text-muted-foreground"><span className="font-medium text-foreground">Duration:</span> {career.duration}</p>
+                  )}
+                  {career.salary && (
+                    <p className="text-muted-foreground"><span className="font-medium text-foreground">Salary:</span> {career.salary}</p>
+                  )}
+                  {career.tags?.length > 0 && (
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {career.tags.map((tag, j) => (
+                        <span key={j} className="text-[10px] bg-secondary px-2 py-0.5 rounded-md font-medium">{tag}</span>
+                      ))}
+                    </div>
+                  )}
+                  {career.description && (
+                    <p className="text-muted-foreground line-clamp-2 pt-1">{career.description}</p>
+                  )}
+                </div>
+              </motion.button>
+            ))}
           </div>
         </motion.div>
+      )}
+
+      {streamedText && !loading && (
+        <div className="text-center">
+          <button
+            onClick={() => {
+              setStreamedText("");
+              setParsedItems([]);
+              setInterests([]);
+              setError(null);
+            }}
+            className="text-sm text-primary font-medium hover:underline"
+          >
+            ← Start over
+          </button>
+        </div>
       )}
     </div>
     </FeatureGate>
   );
+}
+
+function extractCareersFromMarker(text) {
+  const markerIdx = text.indexOf("[ CAREER CARDS ]");
+  if (markerIdx === -1) return [];
+  const block = text.slice(markerIdx + "[ CAREER CARDS ]".length);
+  const lines = block.split("\n").map(l => l.trim());
+  const items = [];
+  let current = null;
+  let paragraphs = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+    const isKey = /^(Stream|Duration|Salary|AI Impact|Level)\s*:/i.test(line);
+    const isBullet = line.startsWith("-") || line.startsWith("•") || /^\d+\./.test(line);
+
+    if (!isKey && !isBullet && line.length < 80 && !line.endsWith(".")) {
+      if (current && (current.salary || current.duration)) {
+        current.description = paragraphs.join(" ").trim();
+        items.push(current);
+      }
+      current = { name: line, duration: "", salary: "", tags: [], description: "" };
+      paragraphs = [];
+      continue;
+    }
+    if (!current) continue;
+
+    const streamMatch = line.match(/^Stream:\s*(.+)/i);
+    if (streamMatch) { current.tags.push(streamMatch[1].trim()); continue; }
+
+    const durationMatch = line.match(/^Duration:\s*([^·]+?)(?:\s*·\s*Level:\s*(.+))?$/i);
+    if (durationMatch) {
+      current.duration = durationMatch[1].trim();
+      if (durationMatch[2]) current.tags.push(durationMatch[2].trim());
+      continue;
+    }
+    const salaryMatch = line.match(/^Salary:\s*(.+)/i);
+    if (salaryMatch) { current.salary = salaryMatch[1].trim(); continue; }
+
+    const aiMatch = line.match(/^AI Impact:\s*([^·]+?)(?:\s*·\s*Growth:\s*(.+))?$/i);
+    if (aiMatch) {
+      current.tags.push("AI: " + aiMatch[1].trim());
+      if (aiMatch[2]) current.tags.push("Growth: " + aiMatch[2].trim());
+      continue;
+    }
+    paragraphs.push(line);
+  }
+
+  if (current && (current.salary || current.duration)) {
+    current.description = paragraphs.join(" ").trim();
+    items.push(current);
+  }
+  return items;
 }

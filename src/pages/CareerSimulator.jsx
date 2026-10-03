@@ -1,25 +1,26 @@
-import { useState } from "react";
-import { Cpu, Plus, X, Loader2, TrendingUp, DollarSign, Zap, Shield } from "lucide-react";
-import ReactMarkdown from "react-markdown";
+import { useState, useRef } from "react";
+import { Cpu, Plus, X, Loader2, ChevronRight } from "lucide-react";
 import { useCredits } from "@/hooks/useCredits";
 import FeatureGate from "../components/FeatureGate";
-import { invokeLLM } from "@/api/llm";
-import { parseAIResponse } from "@/lib/aiResponseHandler";
+import { invokeLLMStream } from "@/api/llm";
 import SectionHeader from "../components/SectionHeader";
-import LoadingGrid from "../components/LoadingGrid";
 import { motion } from "framer-motion";
+import { useNavigate } from "react-router-dom";
+import SmartMarkdown from "../components/SmartMarkdown";
 
 export default function CareerSimulator() {
   const { deductCredit } = useCredits();
+  const navigate = useNavigate();
   const [degree, setDegree] = useState("");
   const [internships, setInternships] = useState([]);
   const [certifications, setCertifications] = useState([]);
   const [internInput, setInternInput] = useState("");
   const [certInput, setCertInput] = useState("");
-  const [result, setResult] = useState(null);
-  const [markdownFallback, setMarkdownFallback] = useState("");
+  const [streamedText, setStreamedText] = useState("");
+  const [parsedItems, setParsedItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const scrollRef = useRef(null);
 
   const addItem = (val, list, setList, setInput) => {
     if (!val.trim() || list.includes(val.trim())) return;
@@ -37,92 +38,138 @@ export default function CareerSimulator() {
     }
 
     setLoading(true);
-    setResult(null);
-    setMarkdownFallback("");
+    setStreamedText("");
+    setParsedItems([]);
     setError(null);
 
+    const prompt = `You are Collade AI, an expert career trajectory simulator.
+
+Simulate a detailed 10-year career outlook for a student with:
+- Degree: ${degree}
+- Internships/Experience: ${internships.join(", ") || "None yet"}
+- Certifications: ${certifications.join(", ") || "None yet"}
+
+=== PART 1: DETAILED SIMULATION ===
+
+Write 4-5 paragraphs covering:
+- Year 1 trajectory — first job, expected salary, common employers
+- Year 3 trajectory — mid-level growth, skills to build, salary progression
+- Year 5 trajectory — specialization, leadership opportunities, realistic salary
+- Year 10 trajectory — senior roles, top salary potential, geography
+- Overall risk assessment — how AI affects this path in the next decade
+
+Then 6-8 "Key Milestones" bullets with specific years and salaries.
+
+Then 5 "Skills to Accelerate Growth" bullets with reasoning.
+
+Then 5 "Biggest Risks & How to Avoid Them" bullets.
+
+Then 4 "Best Locations" bullets with specific cities/countries.
+
+=== PART 2: CAREER CARDS ===
+
+After the guide, write EXACTLY this marker on its own line:
+
+[ CAREER CARDS ]
+
+Then list 12 roles this student could target at different career stages, EACH in this EXACT format (no #, no **, no bullets):
+
+Role Title Here
+Stream: Specific field
+Duration: X years · Level: Undergraduate/Postgraduate/Certification
+Salary: ₹X-Y LPA (India) | $X-Y USD (Global)
+AI Impact: Low/Medium/High · Growth: High/Medium
+[2-3 sentence description of the role and when in the trajectory it fits]
+
+(blank line between each role)
+
+RULES:
+- REAL numbers, REAL companies, REAL salaries with currency
+- NEVER say "varies" — give specific ranges
+- Be brutally honest about AI risks
+- Use Indian context where relevant
+- Plain text format, no markdown symbols
+- Use [ CAREER CARDS ] as the exact marker`;
+
     try {
-      const prompt = `Simulate a detailed 5-10 year career outlook for a student with:
-Degree: ${degree}
-Internships/Experience: ${internships.join(", ") || "None"}
-Certifications: ${certifications.join(", ") || "None"}
-
-Return a JSON object with:
-- path_id, degree
-- predicted_salary_year1, predicted_salary_year5, predicted_salary_year10
-- AI_risk_score (0-100), AI_risk_level, future_proof_score (1-10)
-- job_opportunities_year1, job_opportunities_year5
-- top_roles (array), key_milestones (array with years)
-- growth_potential (string + explanation)
-- best_locations (array), skills_to_accelerate (array)
-- warnings (array), overall_verdict
-
-RULES: NEVER say "varies". Use real numbers and specific names. Be brutally honest about risks.
-
-IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
-
-      const response = await invokeLLM({ prompt: prompt, query: prompt });
-      console.log('[CareerSimulator] Raw response:', response);
-
-      const parsed = parseAIResponse(response);
-      console.log('[CareerSimulator] Parsed type:', parsed.type);
-
-      if (parsed.type === 'json' && parsed.data) {
-        const d = parsed.data;
-        const simResult = {
-          degree: d.degree || degree,
-          predicted_salary_year1: d.predicted_salary_year1 || "",
-          predicted_salary_year5: d.predicted_salary_year5 || "",
-          predicted_salary_year10: d.predicted_salary_year10 || "",
-          AI_risk_level: d.AI_risk_level || "",
-          future_proof_score: d.future_proof_score || "",
-          overall_verdict: d.overall_verdict || "",
-          key_milestones: d.key_milestones || [],
-          top_roles: d.top_roles || [],
-          skills_to_accelerate: d.skills_to_accelerate || [],
-          warnings: d.warnings || [],
-          growth_potential: d.growth_potential || "",
-          best_locations: d.best_locations || [],
-        };
-        setResult(simResult);
-      } else if (parsed.type === 'markdown') {
-        setMarkdownFallback(parsed.raw);
-      } else {
-        setError('No simulation data returned. Please try again.');
-      }
-    } catch (error) {
-      console.error('[CareerSimulator] Error:', error);
-      setError(error.message || 'Failed to simulate career. Please try again.');
-    } finally {
+      let buffer = "";
+      await invokeLLMStream({
+        prompt,
+        onToken: (text) => {
+          buffer += text;
+          setStreamedText(buffer);
+          if (buffer.includes("[ CAREER CARDS ]")) {
+            const items = extractCareersFromMarker(buffer);
+            if (items.length > 0) setParsedItems(items);
+          }
+          if (scrollRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+          }
+        },
+        onDone: () => setLoading(false),
+        onError: (err) => {
+          console.error('[CareerSimulator] Error:', err);
+          setError(err.message || 'Failed to simulate career. Please try again.');
+          setLoading(false);
+        },
+      });
+    } catch (err) {
+      console.error('[CareerSimulator] Catch error:', err);
+      setError(err.message || 'Failed to simulate career.');
       setLoading(false);
     }
   };
 
+  const openCareerDetail = (careerName) => {
+    navigate(`/career-detail?name=${encodeURIComponent(careerName)}&stream=${encodeURIComponent(degree)}`);
+  };
+
+  const guideText = streamedText.split("[ CAREER CARDS ]")[0] || "";
+
   return (
     <FeatureGate onUpgrade={() => {}}>
     <div className="space-y-6">
-      <SectionHeader title="Career Simulator" subtitle="Simulate your 5–10 year career outlook based on your degree + experience" icon={Cpu} />
+      <SectionHeader
+        title="Career Simulator"
+        subtitle="Simulate your 5–10 year career outlook based on your degree + experience"
+        icon={Cpu}
+      />
 
       <div className="bg-card border border-border rounded-xl p-5 space-y-4">
         <div>
           <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Your Degree / Field</label>
-          <input value={degree} onChange={e => setDegree(e.target.value)}
+          <input
+            value={degree}
+            onChange={e => setDegree(e.target.value)}
             placeholder="e.g., B.Tech Computer Science, MBBS, MBA Finance..."
-            className="w-full mt-1.5 bg-secondary rounded-lg px-3.5 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
+            className="w-full mt-1.5 bg-secondary rounded-lg px-3.5 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+          />
         </div>
 
         <div>
           <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Internships / Work Experience</label>
           <div className="flex gap-2 mt-1.5">
-            <input value={internInput} onChange={e => setInternInput(e.target.value)} onKeyDown={e => e.key === "Enter" && addItem(internInput, internships, setInternships, setInternInput)}
+            <input
+              value={internInput}
+              onChange={e => setInternInput(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && addItem(internInput, internships, setInternships, setInternInput)}
               placeholder="e.g., Google SWE Intern, Hospital Shadowing..."
-              className="flex-1 bg-secondary rounded-lg px-3.5 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
-            <button onClick={() => addItem(internInput, internships, setInternships, setInternInput)} className="px-3 bg-primary text-primary-foreground rounded-lg"><Plus className="h-4 w-4" /></button>
+              className="flex-1 bg-secondary rounded-lg px-3.5 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+            <button
+              onClick={() => addItem(internInput, internships, setInternships, setInternInput)}
+              className="px-3 bg-primary text-primary-foreground rounded-lg"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
           </div>
           <div className="flex flex-wrap gap-1.5 mt-2">
             {internships.map((i, idx) => (
               <span key={idx} className="flex items-center gap-1 text-xs bg-blue-50 text-blue-700 px-2.5 py-1 rounded-md">
-                {i} <button onClick={() => setInternships(prev => prev.filter((_, j) => j !== idx))}><X className="h-3 w-3" /></button>
+                {i}
+                <button onClick={() => setInternships(prev => prev.filter((_, j) => j !== idx))}>
+                  <X className="h-3 w-3" />
+                </button>
               </span>
             ))}
           </div>
@@ -131,22 +178,37 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and
         <div>
           <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Certifications</label>
           <div className="flex gap-2 mt-1.5">
-            <input value={certInput} onChange={e => setCertInput(e.target.value)} onKeyDown={e => e.key === "Enter" && addItem(certInput, certifications, setCertifications, setCertInput)}
+            <input
+              value={certInput}
+              onChange={e => setCertInput(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && addItem(certInput, certifications, setCertifications, setCertInput)}
               placeholder="e.g., AWS Cloud, CFA Level 1..."
-              className="flex-1 bg-secondary rounded-lg px-3.5 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
-            <button onClick={() => addItem(certInput, certifications, setCertifications, setCertInput)} className="px-3 bg-primary text-primary-foreground rounded-lg"><Plus className="h-4 w-4" /></button>
+              className="flex-1 bg-secondary rounded-lg px-3.5 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+            <button
+              onClick={() => addItem(certInput, certifications, setCertifications, setCertInput)}
+              className="px-3 bg-primary text-primary-foreground rounded-lg"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
           </div>
           <div className="flex flex-wrap gap-1.5 mt-2">
             {certifications.map((c, idx) => (
               <span key={idx} className="flex items-center gap-1 text-xs bg-purple-50 text-purple-700 px-2.5 py-1 rounded-md">
-                {c} <button onClick={() => setCertifications(prev => prev.filter((_, j) => j !== idx))}><X className="h-3 w-3" /></button>
+                {c}
+                <button onClick={() => setCertifications(prev => prev.filter((_, j) => j !== idx))}>
+                  <X className="h-3 w-3" />
+                </button>
               </span>
             ))}
           </div>
         </div>
 
-        <button onClick={simulate} disabled={!degree.trim() || loading}
-          className="w-full bg-primary text-primary-foreground py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-40 shadow-lg shadow-primary/20 hover:opacity-90">
+        <button
+          onClick={simulate}
+          disabled={!degree.trim() || loading}
+          className="w-full bg-primary text-primary-foreground py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 disabled:opacity-40 shadow-lg shadow-primary/20 hover:opacity-90"
+        >
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Cpu className="h-4 w-4" />}
           Run Simulation
         </button>
@@ -158,85 +220,136 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and
         </div>
       )}
 
-      {loading && <LoadingGrid text="Simulating your career trajectory..." />}
-
-      {!loading && result && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-5">
-          <div className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-xl p-5">
-            <p className="font-heading font-bold text-lg">{result.degree}</p>
-            {result.overall_verdict && <p className="text-sm text-muted-foreground mt-1">{result.overall_verdict}</p>}
+      {loading && !streamedText && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-2xl p-6 text-center"
+        >
+          <div className="flex items-center justify-center gap-2">
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            <p className="font-heading font-semibold text-primary">⚡ Simulating your 10-year trajectory...</p>
           </div>
+        </motion.div>
+      )}
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {[
-              { label: "Year 1 Salary", value: result.predicted_salary_year1, icon: DollarSign, color: "text-green-600" },
-              { label: "Year 5 Salary", value: result.predicted_salary_year5, icon: TrendingUp, color: "text-blue-600" },
-              { label: "Year 10 Salary", value: result.predicted_salary_year10, icon: TrendingUp, color: "text-indigo-600" },
-              { label: "Future-proof", value: result.future_proof_score ? `${result.future_proof_score}/10` : null, icon: Shield, color: "text-purple-600" },
-            ].filter(c => c.value).map((c, i) => (
-              <div key={i} className="bg-card border border-border rounded-xl p-4">
-                <c.icon className={`h-4 w-4 ${c.color}`} />
-                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mt-2">{c.label}</p>
-                <p className={`font-heading font-bold text-sm mt-0.5 ${c.color}`}>{c.value}</p>
-              </div>
-            ))}
-          </div>
-
-          {result.key_milestones?.length > 0 && (
-            <div className="bg-card border border-border rounded-xl p-5">
-              <h3 className="font-heading font-bold mb-3">📅 Career Milestones</h3>
-              <div className="space-y-2">
-                {result.key_milestones.map((m, i) => (
-                  <div key={i} className="flex gap-3 text-sm">
-                    <div className="h-6 w-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[11px] font-bold shrink-0 mt-0.5">{i + 1}</div>
-                    <p className="text-muted-foreground">{m}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="grid sm:grid-cols-2 gap-4">
-            {result.top_roles?.length > 0 && (
-              <div className="bg-card border border-border rounded-xl p-5">
-                <h3 className="font-heading font-bold text-sm mb-2">🎯 Top Roles</h3>
-                {result.top_roles.map((r, i) => <p key={i} className="text-sm text-muted-foreground">• {r}</p>)}
-              </div>
-            )}
-            {result.skills_to_accelerate?.length > 0 && (
-              <div className="bg-card border border-border rounded-xl p-5">
-                <h3 className="font-heading font-bold text-sm mb-2">⚡ Skills to Accelerate Growth</h3>
-                <div className="flex flex-wrap gap-1.5">
-                  {result.skills_to_accelerate.map((s, i) => <span key={i} className="text-xs bg-accent/10 text-accent px-2 py-1 rounded-md">{s}</span>)}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {result.warnings?.length > 0 && (
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-              <h3 className="font-heading font-bold text-amber-700 text-sm mb-2">⚠️ Heads Up</h3>
-              {result.warnings.map((w, i) => <p key={i} className="text-xs text-amber-700">• {w}</p>)}
+      {guideText && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="bg-card border border-border rounded-2xl p-6 sm:p-8"
+        >
+          <SmartMarkdown text={guideText} />
+          {loading && !streamedText.includes("[ CAREER CARDS ]") && (
+            <div className="flex items-center gap-2 mt-4 pt-4 border-t border-border">
+              <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+              <span className="text-xs text-muted-foreground italic">writing...</span>
             </div>
           )}
         </motion.div>
       )}
 
-      {!loading && markdownFallback && !result && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-          <div className="bg-card border border-border rounded-xl p-6 prose prose-invert prose-sm max-w-none
-            prose-headings:text-foreground prose-headings:font-bold
-            prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2
-            prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
-            prose-p:text-muted-foreground prose-p:my-1.5
-            prose-li:text-muted-foreground prose-li:my-0.5
-            prose-strong:text-foreground
-          ">
-            <ReactMarkdown>{markdownFallback}</ReactMarkdown>
+      {parsedItems.length > 0 && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-foreground">
+              🎯 {parsedItems.length} roles you could target
+              {loading && <span className="text-primary italic"> (streaming...)</span>}
+            </p>
+            {loading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
+          </div>
+          <div className="grid sm:grid-cols-2 gap-3">
+            {parsedItems.map((career, i) => (
+              <motion.button
+                key={i}
+                initial={{ opacity: 0, y: 15, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ duration: 0.3, delay: i * 0.03 }}
+                onClick={() => openCareerDetail(career.name)}
+                className="text-left bg-card border border-border rounded-xl p-4 hover:border-primary/50 hover:shadow-md transition-all group"
+              >
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <h3 className="font-heading font-bold text-base group-hover:text-primary transition-colors">{career.name}</h3>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-primary shrink-0 mt-0.5" />
+                </div>
+                <div className="space-y-1.5 text-xs">
+                  {career.duration && (
+                    <p className="text-muted-foreground"><span className="font-medium text-foreground">Duration:</span> {career.duration}</p>
+                  )}
+                  {career.salary && (
+                    <p className="text-muted-foreground"><span className="font-medium text-foreground">Salary:</span> {career.salary}</p>
+                  )}
+                  {career.tags?.length > 0 && (
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {career.tags.map((tag, j) => (
+                        <span key={j} className="text-[10px] bg-secondary px-2 py-0.5 rounded-md font-medium">{tag}</span>
+                      ))}
+                    </div>
+                  )}
+                  {career.description && (
+                    <p className="text-muted-foreground line-clamp-2 pt-1">{career.description}</p>
+                  )}
+                </div>
+              </motion.button>
+            ))}
           </div>
         </motion.div>
       )}
     </div>
     </FeatureGate>
   );
+}
+
+function extractCareersFromMarker(text) {
+  const markerIdx = text.indexOf("[ CAREER CARDS ]");
+  if (markerIdx === -1) return [];
+  const block = text.slice(markerIdx + "[ CAREER CARDS ]".length);
+  const lines = block.split("\n").map(l => l.trim());
+  const items = [];
+  let current = null;
+  let paragraphs = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+    const isKey = /^(Stream|Duration|Salary|AI Impact|Level)\s*:/i.test(line);
+    const isBullet = line.startsWith("-") || line.startsWith("•") || /^\d+\./.test(line);
+
+    if (!isKey && !isBullet && line.length < 80 && !line.endsWith(".")) {
+      if (current && (current.salary || current.duration)) {
+        current.description = paragraphs.join(" ").trim();
+        items.push(current);
+      }
+      current = { name: line, duration: "", salary: "", tags: [], description: "" };
+      paragraphs = [];
+      continue;
+    }
+    if (!current) continue;
+
+    const streamMatch = line.match(/^Stream:\s*(.+)/i);
+    if (streamMatch) { current.tags.push(streamMatch[1].trim()); continue; }
+
+    const durationMatch = line.match(/^Duration:\s*([^·]+?)(?:\s*·\s*Level:\s*(.+))?$/i);
+    if (durationMatch) {
+      current.duration = durationMatch[1].trim();
+      if (durationMatch[2]) current.tags.push(durationMatch[2].trim());
+      continue;
+    }
+    const salaryMatch = line.match(/^Salary:\s*(.+)/i);
+    if (salaryMatch) { current.salary = salaryMatch[1].trim(); continue; }
+
+    const aiMatch = line.match(/^AI Impact:\s*([^·]+?)(?:\s*·\s*Growth:\s*(.+))?$/i);
+    if (aiMatch) {
+      current.tags.push("AI: " + aiMatch[1].trim());
+      if (aiMatch[2]) current.tags.push("Growth: " + aiMatch[2].trim());
+      continue;
+    }
+    paragraphs.push(line);
+  }
+
+  if (current && (current.salary || current.duration)) {
+    current.description = paragraphs.join(" ").trim();
+    items.push(current);
+  }
+  return items;
 }
