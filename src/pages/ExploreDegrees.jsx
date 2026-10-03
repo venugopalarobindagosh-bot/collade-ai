@@ -1,11 +1,11 @@
 import { useState, useRef } from "react";
 import { GraduationCap, Search, Loader2, ChevronRight } from "lucide-react";
-import ReactMarkdown from "react-markdown";
 import { useCredits } from "@/hooks/useCredits";
 import { invokeLLMStream } from "@/api/llm";
 import SectionHeader from "../components/SectionHeader";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
+import SmartMarkdown from "../components/SmartMarkdown";
 
 const LEVELS = ["Undergraduate", "Postgraduate", "Doctorate", "Diploma", "Professional Certification"];
 
@@ -41,30 +41,45 @@ export default function ExploreDegrees() {
 
     const prompt = `You are Collade AI, an expert career intelligence assistant.
 
-List 8 diverse degrees/programs at the ${level} level in the "${stream}" stream.
+For ${level} degrees in the "${stream}" stream, write a HIGHLY DETAILED guide, then list 12 clickable degree cards.
 
-FORMAT EXACTLY LIKE THIS — use ## for each degree:
+=== PART 1: DETAILED GUIDE ===
 
-# ${level} Degrees in ${stream}
+Write 3-4 paragraphs covering:
+- Overview of this stream and its career prospects in 2025-2030
+- Key industry trends with real numbers
+- Why this stream matters globally and in India
+- AI disruption patterns
 
-## [Degree Name 1]
-- **Level:** ${level} · **Duration:** X years
-- **Salary:** ₹X-Y LPA (India) | $X-Y (Global)
-- **AI Impact:** Low/Medium/High · **Growth:** High
-- **Top Universities:** [3 real names]
-[2-3 sentence description]
+Then 5-7 "Key Insights" bullet points with real numbers.
 
-## [Degree Name 2]
-(same format)
+Then "Top Locations" — best 5 cities/countries for this stream.
 
-(repeat for 8 degrees — mix mainstream + niche + emerging)
+Then "How to Choose" — 5 concrete decision factors.
+
+=== PART 2: DEGREE CARDS ===
+
+After the guide, write EXACTLY this marker on its own line:
+
+[ DEGREE CARDS ]
+
+Then list 12 degrees, EACH in this EXACT format (no #, no **, no bullets):
+
+Degree Name Here
+Level: ${level} · Duration: X years
+Salary: ₹X-Y LPA (India) | $X-Y (Global)
+AI Impact: Low/Medium/High · Growth: High
+Top Universities: [3 real names]
+[2-3 sentence detailed description]
+
+(blank line between each degree)
 
 RULES:
-- REAL universities, REAL salaries with currency
+- REAL universities, REAL salaries
 - NEVER say "varies"
-- Each description 2-3 sentences
-- Keep under 700 words
-- NO JSON, NO code blocks`;
+- Use Indian context
+- Plain text format
+- Use [ DEGREE CARDS ] as the exact marker`;
 
     try {
       let buffer = "";
@@ -73,14 +88,16 @@ RULES:
         onToken: (text) => {
           buffer += text;
           setStreamedText(buffer);
-          const items = extractDegreesFromMarkdown(buffer);
-          if (items.length > 0) setParsedItems(items);
+          if (buffer.includes("[ DEGREE CARDS ]")) {
+            const items = extractDegreesFromMarker(buffer);
+            if (items.length > 0) setParsedItems(items);
+          }
           if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         },
         onDone: () => setLoading(false),
         onError: (err) => {
           console.error('[ExploreDegrees] Error:', err);
-          setError(err.message || 'Failed to find degrees. Please try again.');
+          setError(err.message || 'Failed to find degrees.');
           setLoading(false);
         },
       });
@@ -119,29 +136,35 @@ RULES:
 
     const prompt = `You are Collade AI, an expert career intelligence assistant.
 
-List 8 degrees/programs related to: "${searchQuery}"
+For degrees related to "${searchQuery}", write a HIGHLY DETAILED guide, then 12 clickable degree cards.
 
-FORMAT EXACTLY LIKE THIS:
+=== PART 1: DETAILED GUIDE ===
 
-# Degrees Related to "${searchQuery}"
+Write 3-4 paragraphs about this field of study.
 
-## [Degree Name 1]
-- **Level:** Undergraduate/Postgraduate/etc · **Duration:** X years
-- **Salary:** ₹X-Y LPA (India) | $X-Y (Global)
-- **AI Impact:** Low/Medium/High · **Growth:** High
-- **Top Universities:** [3 real names]
+Then 5 "Key Insights" bullet points with real numbers.
+
+Then "Top Universities" — 5 institutions globally.
+
+=== PART 2: DEGREE CARDS ===
+
+After the guide, write EXACTLY:
+
+[ DEGREE CARDS ]
+
+Then list 12 degrees EACH like:
+
+Degree Name
+Level: Undergraduate/Postgraduate · Duration: X years
+Salary: ₹X-Y LPA (India) | $X-Y (Global)
+AI Impact: Low/Medium/High · Growth: High
+Top Universities: [3 real names]
 [2-3 sentence description]
-
-## [Degree Name 2]
-(same format)
-
-(repeat for 8)
 
 RULES:
 - REAL universities, REAL salaries
 - NEVER say "varies"
-- Keep under 700 words
-- NO JSON`;
+- Plain text`;
 
     try {
       let buffer = "";
@@ -150,9 +173,10 @@ RULES:
         onToken: (text) => {
           buffer += text;
           setStreamedText(buffer);
-          const items = extractDegreesFromMarkdown(buffer);
-          if (items.length > 0) setParsedItems(items);
-          if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+          if (buffer.includes("[ DEGREE CARDS ]")) {
+            const items = extractDegreesFromMarker(buffer);
+            if (items.length > 0) setParsedItems(items);
+          }
         },
         onDone: () => setLoading(false),
         onError: (err) => {
@@ -169,6 +193,8 @@ RULES:
   const openDegreeDetail = (degreeName) => {
     navigate(`/career-detail?name=${encodeURIComponent(degreeName)}&level=${encodeURIComponent(selectedLevel || "")}&stream=${encodeURIComponent(selectedStream || "")}`);
   };
+
+  const guideText = streamedText.split("[ DEGREE CARDS ]")[0] || "";
 
   return (
     <div className="space-y-6">
@@ -247,37 +273,24 @@ RULES:
         </motion.div>
       )}
 
-      {streamedText && loading && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="bg-card border border-border rounded-2xl p-6 sm:p-8 max-h-[50vh] overflow-y-auto"
-          ref={scrollRef}
-        >
-          <div className="flex items-center gap-2 mb-4 pb-3 border-b border-border">
-            <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
-            <span className="text-xs font-semibold text-primary uppercase tracking-wider">AI is writing...</span>
-          </div>
-          <div className="prose prose-invert prose-sm max-w-none
-            prose-headings:text-foreground prose-headings:font-bold
-            prose-h1:text-xl prose-h1:mt-0 prose-h1:mb-3 prose-h1:text-primary
-            prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2 prose-h2:text-foreground
-            prose-p:text-muted-foreground prose-p:my-1.5 prose-p:leading-relaxed
-            prose-li:text-muted-foreground prose-li:my-0.5
-            prose-strong:text-foreground prose-strong:font-semibold
-          ">
-            <ReactMarkdown>{streamedText}</ReactMarkdown>
-          </div>
+      {guideText && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-card border border-border rounded-2xl p-6 sm:p-8">
+          <SmartMarkdown text={guideText} />
+          {loading && !streamedText.includes("[ DEGREE CARDS ]") && (
+            <div className="flex items-center gap-2 mt-4 pt-4 border-t border-border">
+              <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+              <span className="text-xs text-muted-foreground italic">writing...</span>
+            </div>
+          )}
         </motion.div>
       )}
 
       {parsedItems.length > 0 && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
           <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">
-              <span className="font-semibold text-foreground">{parsedItems.length}</span>
+            <p className="text-sm font-semibold text-foreground">
+              🎓 {parsedItems.length} degrees to explore
               {loading && <span className="text-primary italic"> (streaming...)</span>}
-              {" "}degrees found
             </p>
             {loading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
           </div>
@@ -318,52 +331,72 @@ RULES:
           </div>
         </motion.div>
       )}
-
-      {!loading && streamedText && parsedItems.length === 0 && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-card border border-border rounded-2xl p-6 sm:p-8">
-          <div className="prose prose-invert prose-sm max-w-none
-            prose-headings:text-foreground prose-headings:font-bold
-            prose-h1:text-2xl prose-h1:mt-0 prose-h1:mb-4 prose-h1:text-primary
-            prose-h2:text-lg prose-h2:mt-6 prose-h2:mb-3 prose-h2:text-primary prose-h2:border-b prose-h2:border-border prose-h2:pb-2
-            prose-p:text-muted-foreground prose-p:my-2 prose-p:leading-relaxed
-            prose-li:text-muted-foreground prose-li:my-1
-            prose-strong:text-foreground prose-strong:font-semibold
-          ">
-            <ReactMarkdown>{streamedText}</ReactMarkdown>
-          </div>
-        </motion.div>
-      )}
     </div>
   );
 }
 
-function extractDegreesFromMarkdown(text) {
-  if (!text || typeof text !== 'string') return [];
-  const items = [];
-  const sectionPattern = /^##\s+(.+?)$\n([\s\S]*?)(?=^##\s|^#\s|$)/gm;
-  let match;
-  while ((match = sectionPattern.exec(text)) !== null) {
-    const name = match[1].trim();
-    const body = match[2];
-    if (!name || name.length > 100) continue;
-    const salaryCheck = body.match(/\*\*Salary:\*\*/i);
-    if (!salaryCheck) continue;
+function extractDegreesFromMarker(text) {
+  const markerIdx = text.indexOf("[ DEGREE CARDS ]");
+  if (markerIdx === -1) return [];
+  const block = text.slice(markerIdx + "[ DEGREE CARDS ]".length);
 
-    const item = { name, duration: "", salary: "", tags: [], description: "" };
-    const durationMatch = body.match(/\*\*Duration:\*\*\s*([^\n·|]+)/i);
-    if (durationMatch) item.duration = durationMatch[1].trim().replace(/[·|].*/, '').trim();
-    const salaryMatch = body.match(/\*\*Salary:\*\*\s*([^\n]+)/i);
-    if (salaryMatch) item.salary = salaryMatch[1].trim();
-    const levelMatch = body.match(/\*\*Level:\*\*\s*([^\n·|]+)/i);
-    if (levelMatch) item.tags.push(levelMatch[1].trim().replace(/[·|].*/, '').trim());
-    const aiMatch = body.match(/\*\*AI Impact:\*\*\s*([^\n·|]+)/i);
-    if (aiMatch) item.tags.push("AI: " + aiMatch[1].trim().replace(/[·|].*/, '').trim());
-    const growthMatch = body.match(/\*\*Growth:\*\*\s*([^\n·|]+)/i);
-    if (growthMatch) item.tags.push("Growth: " + growthMatch[1].trim().replace(/[·|].*/, '').trim());
-    const lines = body.split('\n').filter(l => l.trim());
-    const descLine = [...lines].reverse().find(l => !l.trim().startsWith('-') && !l.trim().startsWith('*') && l.trim().length > 30);
-    if (descLine) item.description = descLine.trim();
-    items.push(item);
+  const lines = block.split("\n").map(l => l.trim());
+  const items = [];
+  let current = null;
+  let paragraphs = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+
+    const isKey = /^(Stream|Duration|Salary|AI Impact|Level|Top Universities)\s*:/i.test(line);
+    const isBullet = line.startsWith("-") || line.startsWith("•") || /^\d+\./.test(line);
+
+    if (!isKey && !isBullet && line.length < 80 && !line.endsWith(".")) {
+      if (current && (current.salary || current.duration)) {
+        current.description = paragraphs.join(" ").trim();
+        items.push(current);
+      }
+      current = { name: line, duration: "", salary: "", tags: [], description: "" };
+      paragraphs = [];
+      continue;
+    }
+    if (!current) continue;
+
+    const durationMatch = line.match(/^Duration:\s*([^·]+?)(?:\s*·\s*Level:\s*(.+))?$/i);
+    if (durationMatch) {
+      current.duration = durationMatch[1].trim();
+      if (durationMatch[2]) current.tags.push(durationMatch[2].trim());
+      continue;
+    }
+
+    const levelMatch = line.match(/^Level:\s*([^·]+?)(?:\s*·\s*Duration:\s*(.+))?$/i);
+    if (levelMatch) {
+      if (!current.duration && levelMatch[2]) current.duration = levelMatch[2].trim();
+      current.tags.push(levelMatch[1].trim());
+      continue;
+    }
+
+    const salaryMatch = line.match(/^Salary:\s*(.+)/i);
+    if (salaryMatch) { current.salary = salaryMatch[1].trim(); continue; }
+
+    const aiMatch = line.match(/^AI Impact:\s*([^·]+?)(?:\s*·\s*Growth:\s*(.+))?$/i);
+    if (aiMatch) {
+      current.tags.push("AI: " + aiMatch[1].trim());
+      if (aiMatch[2]) current.tags.push("Growth: " + aiMatch[2].trim());
+      continue;
+    }
+
+    const unisMatch = line.match(/^Top Universities:\s*(.+)/i);
+    if (unisMatch) { current.tags.push("🎓 " + unisMatch[1].trim()); continue; }
+
+    paragraphs.push(line);
   }
+
+  if (current && (current.salary || current.duration)) {
+    current.description = paragraphs.join(" ").trim();
+    items.push(current);
+  }
+
   return items;
 }

@@ -1,12 +1,12 @@
 import { useState, useRef } from "react";
 import { MapPin, Search, Loader2, ChevronRight } from "lucide-react";
-import ReactMarkdown from "react-markdown";
 import { invokeLLMStream } from "@/api/llm";
 import { useCredits } from "@/hooks/useCredits";
 import FeatureGate from "../components/FeatureGate";
 import SectionHeader from "../components/SectionHeader";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
+import SmartMarkdown from "../components/SmartMarkdown";
 
 const POPULAR_LOCATIONS = [
   { name: "Tokyo, Japan", emoji: "🗼" },
@@ -29,7 +29,7 @@ export default function DreamLocation() {
   const [location, setLocation] = useState("");
   const [selectedLocation, setSelectedLocation] = useState(null);
   const [streamedText, setStreamedText] = useState("");
-  const [parsedCareers, setParsedCareers] = useState([]);
+  const [parsedItems, setParsedItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const scrollRef = useRef(null);
@@ -43,57 +43,52 @@ export default function DreamLocation() {
 
     setLoading(true);
     setStreamedText("");
-    setParsedCareers([]);
+    setParsedItems([]);
     setError(null);
     setSelectedLocation(loc);
 
     const prompt = `You are Collade AI, an expert study-abroad and career guidance assistant.
 
-Give a comprehensive guide to "${loc}" — both the location AND its top careers.
+For "${loc}", write a HIGHLY DETAILED location guide, then list 12 clickable career cards.
 
-FORMAT EXACTLY LIKE THIS:
+=== PART 1: DETAILED GUIDE ===
 
-# ${loc}
+Write 4-5 paragraphs covering:
+- Overview of the city/country for international students
+- Why students choose this location (culture, industry, opportunity)
+- Cost of living breakdown (rent, food, transport — real numbers in local currency + INR)
+- Visa process and post-graduation work options
+- Best universities and what they're known for
 
-## 🌍 About
-[2-3 sentence overview of the city/country]
+Then 5-7 "Key Facts" bullets with real numbers.
 
-## 🎓 Top Universities
-- **[Real university 1]** — rank/specialty
-- **[Real university 2]**
-- **[Real university 3]**
-- **[Real university 4]**
-- **[Real university 5]**
+Then "Top Universities" — 5 real institutions with specialties.
 
-## 💰 Cost of Living
-- **Monthly total for students:** [range in local currency / ~₹X]
-- **Salary range:** [fresh grad to senior in local currency / ~₹X]
+Then "Visa & PR Path" — specific visa names and durations.
 
-## 💼 Top Careers
+=== PART 2: CAREER CARDS ===
 
-## [Career 1 Name]
-- **Salary:** [X local currency / ~₹Y]
-- **Level:** Undergraduate/Postgraduate · **Duration:** X years
-- **AI Impact:** Low/Medium/High · **Growth:** High
-[2-3 sentences about this career specifically in ${loc}]
+After the guide, write EXACTLY this marker on its own line:
 
-## [Career 2 Name]
-(same format)
+[ CAREER CARDS ]
 
-(repeat for 6-8 careers)
+Then list 12 careers popular in ${loc}, EACH in this EXACT format (no #, no **):
 
-## 🛂 Visa & PR
-[2-3 sentences on student visa, work permit, PR pathway]
+Career Name Here
+Stream: Specific field
+Duration: X years · Level: Undergraduate/Postgraduate/Certification
+Salary: [Local currency + INR] | Global: $X-Y USD
+AI Impact: Low/Medium/High · Growth: High/Medium
+[2-3 sentence description of this role specifically in ${loc}]
 
-## 🌟 Best For
-- [Type of student 1]
-- [Type of student 2]
+(blank line between each career)
 
 RULES:
-- REAL universities, REAL salaries in local currency + INR
+- REAL universities, REAL salaries with LOCAL currency AND INR conversion
 - NEVER say "varies"
-- Keep under 700 words
-- NO JSON, NO code blocks`;
+- Use local context (Japan → ¥, UK → £, USA → $, etc.)
+- Plain text format
+- Use [ CAREER CARDS ] as the exact marker`;
 
     try {
       let buffer = "";
@@ -102,9 +97,13 @@ RULES:
         onToken: (text) => {
           buffer += text;
           setStreamedText(buffer);
-          const items = extractCareersFromMarkdown(buffer);
-          if (items.length > 0) setParsedCareers(items);
-          if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+          if (buffer.includes("[ CAREER CARDS ]")) {
+            const items = extractCareersFromMarker(buffer);
+            if (items.length > 0) setParsedItems(items);
+          }
+          if (scrollRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+          }
         },
         onDone: () => setLoading(false),
         onError: (err) => {
@@ -129,6 +128,8 @@ RULES:
   const openCareerDetail = (careerName) => {
     navigate(`/career-detail?name=${encodeURIComponent(careerName)}&stream=${encodeURIComponent(selectedLocation || "")}`);
   };
+
+  const guideText = streamedText.split("[ CAREER CARDS ]")[0] || "";
 
   return (
     <FeatureGate onUpgrade={() => {}}>
@@ -192,53 +193,29 @@ RULES:
         </motion.div>
       )}
 
-      {streamedText && loading && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="bg-card border border-border rounded-2xl p-6 sm:p-8 max-h-[50vh] overflow-y-auto"
-          ref={scrollRef}
-        >
-          <div className="flex items-center gap-2 mb-4 pb-3 border-b border-border">
-            <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
-            <span className="text-xs font-semibold text-primary uppercase tracking-wider">AI is writing...</span>
-          </div>
-          <div className="prose prose-invert prose-sm max-w-none
-            prose-headings:text-foreground prose-headings:font-bold
-            prose-h1:text-xl prose-h1:mt-0 prose-h1:mb-3 prose-h1:text-primary
-            prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2 prose-h2:text-foreground
-            prose-p:text-muted-foreground prose-p:my-1.5 prose-p:leading-relaxed
-            prose-li:text-muted-foreground prose-li:my-0.5
-            prose-strong:text-foreground prose-strong:font-semibold
-          ">
-            <ReactMarkdown>{streamedText}</ReactMarkdown>
-          </div>
-        </motion.div>
-      )}
-
-      {/* Location markdown — always shown when done */}
-      {!loading && streamedText && (
+      {guideText && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-card border border-border rounded-2xl p-6 sm:p-8">
-          <div className="prose prose-invert prose-sm max-w-none
-            prose-headings:text-foreground prose-headings:font-bold
-            prose-h1:text-2xl prose-h1:mt-0 prose-h1:mb-4 prose-h1:text-primary
-            prose-h2:text-lg prose-h2:mt-6 prose-h2:mb-3 prose-h2:text-primary prose-h2:border-b prose-h2:border-border prose-h2:pb-2
-            prose-p:text-muted-foreground prose-p:my-2 prose-p:leading-relaxed
-            prose-li:text-muted-foreground prose-li:my-1
-            prose-strong:text-foreground prose-strong:font-semibold
-          ">
-            <ReactMarkdown>{streamedText}</ReactMarkdown>
-          </div>
+          <SmartMarkdown text={guideText} />
+          {loading && !streamedText.includes("[ CAREER CARDS ]") && (
+            <div className="flex items-center gap-2 mt-4 pt-4 border-t border-border">
+              <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+              <span className="text-xs text-muted-foreground italic">writing...</span>
+            </div>
+          )}
         </motion.div>
       )}
 
-      {parsedCareers.length > 0 && (
+      {parsedItems.length > 0 && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
-          <p className="text-sm font-semibold text-foreground">
-            💼 Explore careers in {selectedLocation}
-          </p>
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-foreground">
+              💼 {parsedItems.length} careers in {selectedLocation}
+              {loading && <span className="text-primary italic"> (streaming...)</span>}
+            </p>
+            {loading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
+          </div>
           <div className="grid sm:grid-cols-2 gap-3">
-            {parsedCareers.map((career, i) => (
+            {parsedItems.map((career, i) => (
               <motion.button
                 key={i}
                 initial={{ opacity: 0, y: 15, scale: 0.95 }}
@@ -252,6 +229,9 @@ RULES:
                   <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-primary shrink-0 mt-0.5" />
                 </div>
                 <div className="space-y-1.5 text-xs">
+                  {career.duration && (
+                    <p className="text-muted-foreground"><span className="font-medium text-foreground">Duration:</span> {career.duration}</p>
+                  )}
                   {career.salary && (
                     <p className="text-muted-foreground"><span className="font-medium text-foreground">Salary:</span> {career.salary}</p>
                   )}
@@ -276,32 +256,61 @@ RULES:
   );
 }
 
-function extractCareersFromMarkdown(text) {
-  if (!text || typeof text !== 'string') return [];
+function extractCareersFromMarker(text) {
+  const markerIdx = text.indexOf("[ CAREER CARDS ]");
+  if (markerIdx === -1) return [];
+  const block = text.slice(markerIdx + "[ CAREER CARDS ]".length);
+
+  const lines = block.split("\n").map(l => l.trim());
   const items = [];
-  const sectionPattern = /^##\s+(.+?)$\n([\s\S]*?)(?=^##\s|^#\s|$)/gm;
-  let match;
-  while ((match = sectionPattern.exec(text)) !== null) {
-    const name = match[1].trim();
-    const body = match[2];
-    if (!name || name.length > 100) continue;
+  let current = null;
+  let paragraphs = [];
 
-    const salaryMatch = body.match(/\*\*Salary:\*\*\s*([^\n]+)/i);
-    if (!salaryMatch) continue;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
 
-    const item = { name, duration: "", salary: salaryMatch[1].trim(), tags: [], description: "" };
-    const durationMatch = body.match(/\*\*Duration:\*\*\s*([^\n·|]+)/i);
-    if (durationMatch) item.duration = durationMatch[1].trim().replace(/[·|].*/, '').trim();
-    const levelMatch = body.match(/\*\*Level:\*\*\s*([^\n·|]+)/i);
-    if (levelMatch) item.tags.push(levelMatch[1].trim().replace(/[·|].*/, '').trim());
-    const aiMatch = body.match(/\*\*AI Impact:\*\*\s*([^\n·|]+)/i);
-    if (aiMatch) item.tags.push("AI: " + aiMatch[1].trim().replace(/[·|].*/, '').trim());
-    const growthMatch = body.match(/\*\*Growth:\*\*\s*([^\n·|]+)/i);
-    if (growthMatch) item.tags.push("Growth: " + growthMatch[1].trim().replace(/[·|].*/, '').trim());
-    const lines = body.split('\n').filter(l => l.trim());
-    const descLine = [...lines].reverse().find(l => !l.trim().startsWith('-') && !l.trim().startsWith('*') && l.trim().length > 30);
-    if (descLine) item.description = descLine.trim();
-    items.push(item);
+    const isKey = /^(Stream|Duration|Salary|AI Impact|Level|Top Universities)\s*:/i.test(line);
+    const isBullet = line.startsWith("-") || line.startsWith("•") || /^\d+\./.test(line);
+
+    if (!isKey && !isBullet && line.length < 80 && !line.endsWith(".")) {
+      if (current && (current.salary || current.duration)) {
+        current.description = paragraphs.join(" ").trim();
+        items.push(current);
+      }
+      current = { name: line, duration: "", salary: "", tags: [], description: "" };
+      paragraphs = [];
+      continue;
+    }
+    if (!current) continue;
+
+    const streamMatch = line.match(/^Stream:\s*(.+)/i);
+    if (streamMatch) { current.tags.push(streamMatch[1].trim()); continue; }
+
+    const durationMatch = line.match(/^Duration:\s*([^·]+?)(?:\s*·\s*Level:\s*(.+))?$/i);
+    if (durationMatch) {
+      current.duration = durationMatch[1].trim();
+      if (durationMatch[2]) current.tags.push(durationMatch[2].trim());
+      continue;
+    }
+
+    const salaryMatch = line.match(/^Salary:\s*(.+)/i);
+    if (salaryMatch) { current.salary = salaryMatch[1].trim(); continue; }
+
+    const aiMatch = line.match(/^AI Impact:\s*([^·]+?)(?:\s*·\s*Growth:\s*(.+))?$/i);
+    if (aiMatch) {
+      current.tags.push("AI: " + aiMatch[1].trim());
+      if (aiMatch[2]) current.tags.push("Growth: " + aiMatch[2].trim());
+      continue;
+    }
+
+    paragraphs.push(line);
   }
+
+  if (current && (current.salary || current.duration)) {
+    current.description = paragraphs.join(" ").trim();
+    items.push(current);
+  }
+
   return items;
 }
