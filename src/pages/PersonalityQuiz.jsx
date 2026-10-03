@@ -1,68 +1,106 @@
-import { useState } from "react";
-import { Smile, ArrowRight, RefreshCw } from "lucide-react";
-import ReactMarkdown from "react-markdown";
+import { useState, useRef } from "react";
+import { Smile, ArrowRight, Loader2, ChevronRight } from "lucide-react";
 import { useCredits } from "@/hooks/useCredits";
 import FeatureGate from "../components/FeatureGate";
-import { invokeLLM } from "@/api/llm";
-import { parseAIResponse, extractArray } from "@/lib/aiResponseHandler";
+import { invokeLLMStream } from "@/api/llm";
 import SectionHeader from "../components/SectionHeader";
-import CareerCard from "../components/CareerCard";
-import LoadingGrid from "../components/LoadingGrid";
 import { motion, AnimatePresence } from "framer-motion";
+import { useNavigate } from "react-router-dom";
+import SmartMarkdown from "../components/SmartMarkdown";
 
 const QUESTIONS = [
   {
     q: "After a big group project, you feel...",
     options: [
-      { label: "⚡ Energized! I love collaborating", value: "extrovert" },
-      { label: "😌 Drained — I need alone time to recharge", value: "introvert" }
+      { label: "⚡ Energized — I thrive on collaboration", value: "extrovert" },
+      { label: "😌 Content — but I need alone time to recharge", value: "ambivert" },
+      { label: "🔋 Drained — I prefer working solo", value: "introvert" },
+      { label: "🎯 Focused — it depends on the team", value: "selective" },
+      { label: "🌟 Inspired — the ideas got me excited", value: "idea_person" }
     ]
   },
   {
-    q: "You'd rather spend a Saturday...",
+    q: "When faced with a hard problem, your instinct is to...",
     options: [
-      { label: "🎨 Making something creative — art, music, writing", value: "creative" },
-      { label: "📊 Solving puzzles, coding, or analyzing data", value: "analytical" }
+      { label: "🧩 Break it into smaller pieces", value: "analytical" },
+      { label: "💡 Brainstorm creative alternatives", value: "creative" },
+      { label: "📊 Gather data before deciding", value: "data_driven" },
+      { label: "🗣️ Talk it through with someone", value: "collaborative" },
+      { label: "⚡ Trust my gut and try things fast", value: "intuitive" }
     ]
   },
   {
-    q: "Your dream job has...",
+    q: "Your dream work environment is...",
     options: [
-      { label: "🚀 High risk, high reward — startup / entrepreneurship", value: "risk_taker" },
-      { label: "🏛️ Stability, good salary, and clear growth path", value: "stable" }
+      { label: "🚀 Fast-paced startup with high risk/reward", value: "startup" },
+      { label: "🏛️ Stable company with clear career path", value: "corporate" },
+      { label: "🎨 Creative studio or agency", value: "creative_env" },
+      { label: "🌍 Remote, flexible, global team", value: "remote" },
+      { label: "🔬 Research lab or specialized institution", value: "research" }
     ]
   },
   {
-    q: "You prefer learning by...",
+    q: "When you're learning something new, you prefer to...",
     options: [
-      { label: "🙌 Doing — hands-on projects and experiments", value: "hands_on" },
-      { label: "📚 Reading and understanding theory first", value: "theoretical" }
+      { label: "🙌 Dive in — figure it out hands-on", value: "hands_on" },
+      { label: "📚 Read the theory first, then apply", value: "theoretical" },
+      { label: "🎥 Watch videos or observe experts", value: "visual" },
+      { label: "👥 Learn with a group or mentor", value: "social" },
+      { label: "🧪 Experiment with a small project", value: "experimental" }
     ]
   },
   {
     q: "In a team, you naturally become...",
     options: [
-      { label: "👑 The leader who drives direction", value: "leader" },
-      { label: "🔧 The specialist who does deep work", value: "specialist" }
+      { label: "👑 The leader driving vision and decisions", value: "leader" },
+      { label: "🔧 The specialist doing deep technical work", value: "specialist" },
+      { label: "🌉 The bridge — connecting people and ideas", value: "connector" },
+      { label: "⚡ The executor — turning plans into reality", value: "executor" },
+      { label: "🎨 The creative voice — pushing the vision further", value: "creative_lead" }
     ]
   },
   {
-    q: "You're most excited by...",
+    q: "What excites you most about work?",
     options: [
-      { label: "🌍 Changing the world / social impact", value: "impact" },
-      { label: "💰 Building wealth and financial freedom", value: "wealth" }
+      { label: "🌍 Making real impact on people's lives", value: "impact" },
+      { label: "💰 Building significant wealth and freedom", value: "wealth" },
+      { label: "🏆 Recognition and status in your field", value: "recognition" },
+      { label: "🧠 Solving intellectually hard problems", value: "intellectual" },
+      { label: "🎨 Creative expression and building your own thing", value: "creative_expression" }
+    ]
+  },
+  {
+    q: "Your ideal 10-year future looks like...",
+    options: [
+      { label: "🏢 Leading a team at a big company", value: "exec_track" },
+      { label: "🚀 Running your own startup or business", value: "entrepreneur" },
+      { label: "🔬 Recognized expert in a specialized field", value: "expert_track" },
+      { label: "🌱 Balanced life with fulfilling work", value: "balanced" },
+      { label: "✈️ Traveling, freelancing, working globally", value: "location_free" }
+    ]
+  },
+  {
+    q: "How do you handle failure?",
+    options: [
+      { label: "🔥 Get back up immediately — failure fuels me", value: "resilient" },
+      { label: "🤔 Reflect deeply and analyze what went wrong", value: "reflective" },
+      { label: "🙋 Ask for feedback and adjust fast", value: "coachable" },
+      { label: "😔 It hits hard — I need time to recover", value: "sensitive" },
+      { label: "📈 Track patterns — I learn from every mistake", value: "systematic" }
     ]
   }
 ];
 
 export default function PersonalityQuiz() {
   const { deductCredit } = useCredits();
+  const navigate = useNavigate();
   const [answers, setAnswers] = useState({});
-  const [result, setResult] = useState(null);
-  const [markdownFallback, setMarkdownFallback] = useState("");
+  const [streamedText, setStreamedText] = useState("");
+  const [parsedItems, setParsedItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [currentQ, setCurrentQ] = useState(0);
   const [error, setError] = useState(null);
+  const scrollRef = useRef(null);
 
   const answer = (val) => {
     const newAnswers = { ...answers, [currentQ]: val };
@@ -83,71 +121,111 @@ export default function PersonalityQuiz() {
 
     setLoading(true);
     setError(null);
-    setMarkdownFallback("");
+    setStreamedText("");
+    setParsedItems([]);
 
-    const profile = QUESTIONS.map((q, i) => `${q.q} → ${q.options.find(o => o.value === answers[i])?.label || answers[i]}`).join("\n");
+    const profile = QUESTIONS.map((q, i) => {
+      const chosen = q.options.find(o => o.value === answers[i]);
+      return `${q.q} → ${chosen?.label || answers[i]}`;
+    }).join("\n");
 
-    try {
-      const prompt = `Based on this personality quiz for a high school/college student, determine their personality type and give career recommendations:
+    const prompt = `You are Collade AI, an expert personality and career analyst.
 
-Quiz Answers:
+Analyze this student's personality based on their answers, then list 12 careers matched to them.
+
+=== QUIZ ANSWERS ===
 ${profile}
 
-Return a JSON object with:
-- personality_type (string)
-- personality_emoji (string)
-- personality_description (string)
-- strengths (array)
-- growth_areas (array)
-- work_style (string)
-- famous_examples (array)
-- recommended_courses (array of: name, stream, level, duration, short_description, salary_range, ai_impact, growth, locations)
-- recommended_careers (array)
-- avoid_these (array)
-- motivational_message (string)
+=== PART 1: DETAILED ANALYSIS ===
 
-IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
+Write a deep, insightful 4-5 paragraph analysis covering:
+- Core personality type with a memorable name
+- How they think and make decisions
+- Their natural strengths and blind spots
+- Ideal work environment and team role
+- What drives them (money, impact, mastery, etc.)
+- How they'll likely evolve over the next decade
 
-      const response = await invokeLLM({ prompt, query: prompt });
-      console.log('[PersonalityQuiz] Raw response:', response);
+Then 6-8 "Core Strengths" bullets tied to their specific answers.
 
-      const parsed = parseAIResponse(response);
-      console.log('[PersonalityQuiz] Parsed type:', parsed.type);
+Then 5 "Growth Areas to Work On" bullets.
 
-      if (parsed.type === 'json' && parsed.data) {
-        const d = parsed.data;
-        setResult({
-          personality_type: d.personality_type || "",
-          personality_emoji: d.personality_emoji || "✨",
-          personality_description: d.personality_description || "",
-          strengths: d.strengths || [],
-          growth_areas: d.growth_areas || [],
-          work_style: d.work_style || "",
-          famous_examples: d.famous_examples || [],
-          recommended_courses: extractArray(d, ['recommended_courses', 'courses']),
-          recommended_careers: d.recommended_careers || [],
-          avoid_these: d.avoid_these || [],
-          motivational_message: d.motivational_message || "",
-        });
-      } else if (parsed.type === 'markdown') {
-        setMarkdownFallback(parsed.raw);
-      } else {
-        setError("No analysis returned. Please try again.");
-      }
+Then 5 "Your Ideal Work Environment" bullets.
+
+Then 4 "Famous People with Your Type" bullets — real successful people who share traits.
+
+=== PART 2: MATCHED CAREERS ===
+
+After the analysis, write EXACTLY this marker on its own line:
+
+[ CAREER CARDS ]
+
+Then list 12 careers matching this personality, EACH in this EXACT format (no #, no **, no bullets):
+
+Career Name Here
+Stream: Specific field
+Duration: X years · Level: Undergraduate/Postgraduate/Certification
+Salary: ₹X-Y LPA (India) | $X-Y USD (Global)
+AI Impact: Low/Medium/High · Growth: High/Medium
+[2-3 sentence description explaining WHY this career matches their specific personality type]
+
+(blank line between each career)
+
+RULES:
+- Reference their actual quiz answers in descriptions
+- REAL salaries with currency
+- NEVER say "varies"
+- Plain text format, no markdown symbols
+- Use [ CAREER CARDS ] as the exact marker`;
+
+    try {
+      let buffer = "";
+      await invokeLLMStream({
+        prompt,
+        onToken: (text) => {
+          buffer += text;
+          setStreamedText(buffer);
+          if (buffer.includes("[ CAREER CARDS ]")) {
+            const items = extractCareersFromMarker(buffer);
+            if (items.length > 0) setParsedItems(items);
+          }
+          if (scrollRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+          }
+        },
+        onDone: () => setLoading(false),
+        onError: (err) => {
+          console.error('[PersonalityQuiz] Error:', err);
+          setError(err.message || 'Failed to analyze personality.');
+          setLoading(false);
+        },
+      });
     } catch (err) {
-      console.error('[PersonalityQuiz] Error:', err);
-      setError(err.message || 'Failed to analyze personality. Please try again.');
-    } finally {
+      console.error('[PersonalityQuiz] Catch error:', err);
+      setError(err.message || 'Failed to analyze personality.');
       setLoading(false);
     }
   };
 
-  const reset = () => { setAnswers({}); setResult(null); setMarkdownFallback(""); setCurrentQ(0); setError(null); };
+  const reset = () => {
+    setAnswers({});
+    setStreamedText("");
+    setParsedItems([]);
+    setCurrentQ(0);
+    setError(null);
+  };
+
+  const openCareerDetail = (name) => {
+    navigate(`/career-detail?name=${encodeURIComponent(name)}&stream=${encodeURIComponent("Personality Match")}`);
+  };
+
+  const guideText = streamedText.split("[ CAREER CARDS ]")[0] || "";
+  const showQuiz = !streamedText && !loading;
 
   return (
     <FeatureGate onUpgrade={() => {}}>
     <div className="space-y-6">
-      <SectionHeader title="Personality Analyzer" subtitle="A fun 6-question quiz to discover careers that fit YOU" icon={Smile} />
+      <SectionHeader title="Personality Analyzer" subtitle="8 deep questions to discover careers that fit YOU" icon={Smile} />
 
       {error && (
         <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4 text-destructive">
@@ -155,7 +233,7 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and
         </div>
       )}
 
-      {!result && !loading && !markdownFallback && (
+      {showQuiz && (
         <div className="space-y-4">
           <div className="flex gap-1.5">
             {QUESTIONS.map((_, i) => (
@@ -194,101 +272,146 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and
             </motion.div>
           </AnimatePresence>
 
-          <p className="text-xs text-center text-muted-foreground">Answer all 6 questions to unlock your personality profile!</p>
+          <p className="text-xs text-center text-muted-foreground">Answer all {QUESTIONS.length} questions to unlock your personality profile!</p>
         </div>
       )}
 
-      {loading && <LoadingGrid text="Analyzing your unique personality..." />}
-
-      {!loading && result && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-          <button onClick={reset} className="text-sm text-primary font-medium hover:underline">← Retake Quiz</button>
-
-          <div className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-2xl p-6 text-center">
-            <p className="text-5xl mb-3">{result.personality_emoji || "✨"}</p>
-            <h2 className="font-heading text-2xl font-bold">{result.personality_type}</h2>
-            <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">{result.personality_description}</p>
-            {result.motivational_message && (
-              <p className="mt-4 text-sm font-medium text-primary bg-primary/10 rounded-xl px-4 py-2">{result.motivational_message}</p>
-            )}
+      {loading && !streamedText && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-2xl p-6 text-center"
+        >
+          <div className="flex items-center justify-center gap-2">
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            <p className="font-heading font-semibold text-primary">✨ Analyzing your personality...</p>
           </div>
+        </motion.div>
+      )}
 
-          <div className="grid sm:grid-cols-2 gap-4">
-            {result.strengths?.length > 0 && (
-              <div className="bg-card border border-border rounded-xl p-4">
-                <p className="text-xs font-semibold text-green-600 uppercase tracking-wider mb-2">✅ Your Strengths</p>
-                {result.strengths.map((s, i) => <p key={i} className="text-sm text-muted-foreground">• {s}</p>)}
-              </div>
-            )}
-            {result.growth_areas?.length > 0 && (
-              <div className="bg-card border border-border rounded-xl p-4">
-                <p className="text-xs font-semibold text-amber-600 uppercase tracking-wider mb-2">🌱 Growth Areas</p>
-                {result.growth_areas.map((s, i) => <p key={i} className="text-sm text-muted-foreground">• {s}</p>)}
-              </div>
-            )}
-          </div>
-
-          {result.work_style && (
-            <div className="bg-card border border-border rounded-xl p-4">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Your Work Style</p>
-              <p className="text-sm">{result.work_style}</p>
-            </div>
-          )}
-
-          {result.famous_examples?.length > 0 && (
-            <div>
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Famous people with your type</p>
-              <div className="flex flex-wrap gap-1.5">
-                {result.famous_examples.map((e, i) => <span key={i} className="text-xs bg-secondary px-3 py-1.5 rounded-lg">{e}</span>)}
-              </div>
-            </div>
-          )}
-
-          {result.recommended_courses?.length > 0 && (
-            <div>
-              <h3 className="font-heading font-bold text-lg mb-3">🎯 Recommended Paths For You</h3>
-              <div className="grid sm:grid-cols-2 gap-3">
-                {result.recommended_courses.map((c, i) => <CareerCard key={i} career={c} index={i} />)}
-              </div>
-            </div>
-          )}
-
-          {result.recommended_careers?.length > 0 && (
-            <div className="bg-card border border-border rounded-xl p-4">
-              <p className="text-xs font-semibold text-primary uppercase tracking-wider mb-2">🌟 Recommended Careers</p>
-              <div className="flex flex-wrap gap-1.5">
-                {result.recommended_careers.map((c, i) => <span key={i} className="text-xs bg-primary/10 text-primary px-2.5 py-1 rounded-md">{c}</span>)}
-              </div>
-            </div>
-          )}
-
-          {result.avoid_these?.length > 0 && (
-            <div className="bg-secondary rounded-xl p-4">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">⚠️ Careers to Think Twice About</p>
-              <div className="flex flex-wrap gap-1.5">
-                {result.avoid_these.map((e, i) => <span key={i} className="text-xs bg-destructive/10 text-destructive px-2.5 py-1 rounded-md">{e}</span>)}
-              </div>
+      {guideText && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="bg-card border border-border rounded-2xl p-6 sm:p-8"
+        >
+          <SmartMarkdown text={guideText} />
+          {loading && !streamedText.includes("[ CAREER CARDS ]") && (
+            <div className="flex items-center gap-2 mt-4 pt-4 border-t border-border">
+              <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+              <span className="text-xs text-muted-foreground italic">writing...</span>
             </div>
           )}
         </motion.div>
       )}
 
-      {!loading && markdownFallback && !result && (
+      {parsedItems.length > 0 && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
-          <button onClick={reset} className="text-sm text-primary font-medium hover:underline">← Retake Quiz</button>
-          <div className="bg-card border border-border rounded-xl p-6 prose prose-invert prose-sm max-w-none
-            prose-headings:text-foreground prose-headings:font-bold
-            prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2
-            prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
-            prose-p:text-muted-foreground prose-p:my-1.5
-            prose-li:text-muted-foreground prose-li:my-0.5
-            prose-strong:text-foreground
-          ">
-            <ReactMarkdown>{markdownFallback}</ReactMarkdown>
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-foreground">
+              🎯 {parsedItems.length} careers matched to your personality
+              {loading && <span className="text-primary italic"> (streaming...)</span>}
+            </p>
+            {loading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
+          </div>
+          <div className="grid sm:grid-cols-2 gap-3">
+            {parsedItems.map((career, i) => (
+              <motion.button
+                key={i}
+                initial={{ opacity: 0, y: 15, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ duration: 0.3, delay: i * 0.03 }}
+                onClick={() => openCareerDetail(career.name)}
+                className="text-left bg-card border border-border rounded-xl p-4 hover:border-primary/50 hover:shadow-md transition-all group"
+              >
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <h3 className="font-heading font-bold text-base group-hover:text-primary transition-colors">{career.name}</h3>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-primary shrink-0 mt-0.5" />
+                </div>
+                <div className="space-y-1.5 text-xs">
+                  {career.duration && (
+                    <p className="text-muted-foreground"><span className="font-medium text-foreground">Duration:</span> {career.duration}</p>
+                  )}
+                  {career.salary && (
+                    <p className="text-muted-foreground"><span className="font-medium text-foreground">Salary:</span> {career.salary}</p>
+                  )}
+                  {career.tags?.length > 0 && (
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {career.tags.map((tag, j) => (
+                        <span key={j} className="text-[10px] bg-secondary px-2 py-0.5 rounded-md font-medium">{tag}</span>
+                      ))}
+                    </div>
+                  )}
+                  {career.description && (
+                    <p className="text-muted-foreground line-clamp-2 pt-1">{career.description}</p>
+                  )}
+                </div>
+              </motion.button>
+            ))}
           </div>
         </motion.div>
+      )}
+
+      {streamedText && !loading && (
+        <div className="text-center">
+          <button onClick={reset} className="text-sm text-primary font-medium hover:underline">← Retake Quiz</button>
+        </div>
       )}
     </div>
     </FeatureGate>
   );
+}
+
+function extractCareersFromMarker(text) {
+  const markerIdx = text.indexOf("[ CAREER CARDS ]");
+  if (markerIdx === -1) return [];
+  const block = text.slice(markerIdx + "[ CAREER CARDS ]".length);
+  const lines = block.split("\n").map(l => l.trim());
+  const items = [];
+  let current = null;
+  let paragraphs = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+    const isKey = /^(Stream|Duration|Salary|AI Impact|Level)\s*:/i.test(line);
+    const isBullet = line.startsWith("-") || line.startsWith("•") || /^\d+\./.test(line);
+
+    if (!isKey && !isBullet && line.length < 80 && !line.endsWith(".")) {
+      if (current && (current.salary || current.duration)) {
+        current.description = paragraphs.join(" ").trim();
+        items.push(current);
+      }
+      current = { name: line, duration: "", salary: "", tags: [], description: "" };
+      paragraphs = [];
+      continue;
+    }
+    if (!current) continue;
+
+    const streamMatch = line.match(/^Stream:\s*(.+)/i);
+    if (streamMatch) { current.tags.push(streamMatch[1].trim()); continue; }
+
+    const durationMatch = line.match(/^Duration:\s*([^·]+?)(?:\s*·\s*Level:\s*(.+))?$/i);
+    if (durationMatch) {
+      current.duration = durationMatch[1].trim();
+      if (durationMatch[2]) current.tags.push(durationMatch[2].trim());
+      continue;
+    }
+    const salaryMatch = line.match(/^Salary:\s*(.+)/i);
+    if (salaryMatch) { current.salary = salaryMatch[1].trim(); continue; }
+
+    const aiMatch = line.match(/^AI Impact:\s*([^·]+?)(?:\s*·\s*Growth:\s*(.+))?$/i);
+    if (aiMatch) {
+      current.tags.push("AI: " + aiMatch[1].trim());
+      if (aiMatch[2]) current.tags.push("Growth: " + aiMatch[2].trim());
+      continue;
+    }
+    paragraphs.push(line);
+  }
+
+  if (current && (current.salary || current.duration)) {
+    current.description = paragraphs.join(" ").trim();
+    items.push(current);
+  }
+  return items;
 }

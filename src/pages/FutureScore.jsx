@@ -1,13 +1,12 @@
-import { useState } from "react";
-import { Shield, Search, Loader2, TrendingUp, Zap, AlertTriangle } from "lucide-react";
-import ReactMarkdown from "react-markdown";
+import { useState, useRef } from "react";
+import { Shield, Search, Loader2, ChevronRight } from "lucide-react";
 import { useCredits } from "@/hooks/useCredits";
 import FeatureGate from "../components/FeatureGate";
-import { invokeLLM } from "@/api/llm";
-import { parseAIResponse, extractArray } from "@/lib/aiResponseHandler";
+import { invokeLLMStream } from "@/api/llm";
 import SectionHeader from "../components/SectionHeader";
-import LoadingGrid from "../components/LoadingGrid";
 import { motion } from "framer-motion";
+import { useNavigate } from "react-router-dom";
+import SmartMarkdown from "../components/SmartMarkdown";
 
 const POPULAR = [
   "Software Engineering", "Medicine", "Law", "Data Science", "Architecture",
@@ -17,12 +16,13 @@ const POPULAR = [
 
 export default function FutureScore() {
   const { deductCredit } = useCredits();
+  const navigate = useNavigate();
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState(null);
-  const [markdownFallback, setMarkdownFallback] = useState("");
+  const [streamedText, setStreamedText] = useState("");
+  const [parsedItems, setParsedItems] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [sortBy, setSortBy] = useState("score");
   const [error, setError] = useState(null);
+  const scrollRef = useRef(null);
 
   const analyze = async (term) => {
     const q = term || query.trim();
@@ -35,59 +35,92 @@ export default function FutureScore() {
     }
 
     setLoading(true);
-    setResults(null);
-    setMarkdownFallback("");
+    setStreamedText("");
+    setParsedItems([]);
     setError(null);
 
+    const prompt = `You are Collade AI, an expert AI-disruption analyst.
+
+Analyze AI future-proofing for: "${q}"
+
+Write a HIGHLY DETAILED analysis, then list 12 scorecards (the main field + 11 related specializations/sub-fields).
+
+=== PART 1: DETAILED ANALYSIS ===
+
+Write 4-5 paragraphs covering:
+- What "${q}" actually involves day-to-day
+- Which tasks in this field are AI-automatable vs AI-resistant
+- Historical disruption patterns in this industry
+- Which specializations are safest vs most at-risk
+- How the field is likely to evolve 2025-2035
+
+Then 6-8 "AI-Resistant Skills" bullets that will matter most.
+
+Then 5 "Career Pivot Options" bullets — adjacent roles if the field changes.
+
+Then 4-5 "Early Warning Signs" bullets — how to know if your job is at risk.
+
+Then 5 "Recommended Actions" bullets for students entering this field.
+
+=== PART 2: SCORECARDS ===
+
+After the guide, write EXACTLY this marker on its own line:
+
+[ SCORECARDS ]
+
+Then list 12 scorecards, EACH in this EXACT format (no #, no **, no bullets):
+
+Field/Specialization Name
+Stream: ${q} — specific sub-field
+AI Proof Score: X/10 · Risk Level: Low/Medium/High
+Growth Potential: X% over 5 years · Time Horizon: Years until major disruption
+Key Reason: 1 sentence explaining the score
+Safe Skills: skill1, skill2, skill3
+[2-3 sentence description of the specialization and its AI outlook]
+
+(blank line between each scorecard)
+
+RULES:
+- REAL sub-fields and specializations
+- REAL growth percentages with reasoning
+- NEVER say "varies"
+- Plain text format, no markdown symbols
+- Use [ SCORECARDS ] as the exact marker`;
+
     try {
-      const prompt = `Analyze the AI-future-proofing potential of: "${q}". Generate a comprehensive AI Future-Proof Scorecard.
-
-Provide scores and analysis for the main field AND 5-6 related specializations/sub-fields. Rate each on AI-proof score (1-10), risk level, growth potential (%), and time horizon.
-
-Return a JSON object with:
-- main_field (string)
-- overview (string)
-- scorecards (array of: course_name, AI_proof_score, risk_level, growth_potential, time_horizon, key_reason, safe_skills (array))
-- recommendation (string)
-
-IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and end with }.`;
-
-      const response = await invokeLLM({ prompt, query: prompt });
-      console.log('[FutureScore] Raw response:', response);
-
-      const parsed = parseAIResponse(response);
-      console.log('[FutureScore] Parsed type:', parsed.type);
-
-      if (parsed.type === 'json' && parsed.data) {
-        const scorecards = extractArray(parsed.data, ['scorecards', 'scores', 'results']);
-        setResults({
-          main_field: parsed.data.main_field || q,
-          overview: parsed.data.overview || "",
-          scorecards: scorecards,
-          recommendation: parsed.data.recommendation || "",
-        });
-      } else if (parsed.type === 'markdown') {
-        setMarkdownFallback(parsed.raw);
-      } else {
-        setError("No analysis returned. Please try again.");
-      }
+      let buffer = "";
+      await invokeLLMStream({
+        prompt,
+        onToken: (text) => {
+          buffer += text;
+          setStreamedText(buffer);
+          if (buffer.includes("[ SCORECARDS ]")) {
+            const items = extractScorecardsFromMarker(buffer);
+            if (items.length > 0) setParsedItems(items);
+          }
+          if (scrollRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+          }
+        },
+        onDone: () => setLoading(false),
+        onError: (err) => {
+          console.error('[FutureScore] Error:', err);
+          setError(err.message || 'Failed to analyze.');
+          setLoading(false);
+        },
+      });
     } catch (err) {
-      console.error('[FutureScore] Error:', err);
-      setError(err.message || 'Failed to analyze future-proof score. Please try again.');
-    } finally {
+      console.error('[FutureScore] Catch error:', err);
+      setError(err.message || 'Failed to analyze.');
       setLoading(false);
     }
   };
 
-  const sorted = results?.scorecards ? [...results.scorecards].sort((a, b) =>
-    sortBy === "score" ? (b.AI_proof_score || 0) - (a.AI_proof_score || 0) : (a.risk_level || "").localeCompare(b.risk_level || "")
-  ) : [];
-
-  const riskConfig = {
-    Low: { color: "text-green-600", bg: "bg-green-50", bar: "bg-green-500" },
-    Medium: { color: "text-amber-600", bg: "bg-amber-50", bar: "bg-amber-500" },
-    High: { color: "text-red-600", bg: "bg-red-50", bar: "bg-red-500" },
+  const openCareerDetail = (name) => {
+    navigate(`/career-detail?name=${encodeURIComponent(name)}&stream=${encodeURIComponent("Future Proof")}`);
   };
+
+  const guideText = streamedText.split("[ SCORECARDS ]")[0] || "";
 
   return (
     <FeatureGate onUpgrade={() => {}}>
@@ -122,93 +155,145 @@ IMPORTANT: Return ONLY valid JSON. No markdown, no code fences. Start with { and
         </div>
       )}
 
-      {loading && <LoadingGrid text="Scoring with AI trend analysis..." />}
-
-      {!loading && results && sorted.length > 0 && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-5">
-          {results.overview && (
-            <div className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-xl p-5">
-              <p className="font-heading font-bold text-lg">{results.main_field || query}</p>
-              <p className="text-sm text-muted-foreground mt-1">{results.overview}</p>
-            </div>
-          )}
-
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground font-medium">Sort by:</span>
-            {["score", "risk"].map(s => (
-              <button key={s} onClick={() => setSortBy(s)}
-                className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-all ${sortBy === s ? "bg-foreground text-background" : "bg-secondary"}`}>
-                {s === "score" ? "Highest Score" : "Lowest Risk"}
-              </button>
-            ))}
+      {loading && !streamedText && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/20 rounded-2xl p-6 text-center"
+        >
+          <div className="flex items-center justify-center gap-2">
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            <p className="font-heading font-semibold text-primary">🛡️ Scoring with AI trend analysis...</p>
           </div>
+        </motion.div>
+      )}
 
-          <div className="space-y-3">
-            {sorted.map((card, i) => {
-              const cfg = riskConfig[card.risk_level] || riskConfig.Medium;
-              return (
-                <motion.div key={i} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}
-                  className="bg-card border border-border rounded-xl p-5 space-y-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1">
-                      <h3 className="font-heading font-bold text-base">{card.course_name || "Career"}</h3>
-                      {card.key_reason && <p className="text-xs text-muted-foreground mt-0.5">{card.key_reason}</p>}
-                    </div>
-                    <div className="text-center shrink-0">
-                      <div className={`h-12 w-12 rounded-xl ${cfg.bg} flex items-center justify-center`}>
-                        <span className={`text-lg font-bold ${cfg.color}`}>{card.AI_proof_score || 5}</span>
-                      </div>
-                      <p className="text-[10px] text-muted-foreground mt-0.5">/10</p>
-                    </div>
-                  </div>
-
-                  <div className="h-2 bg-secondary rounded-full overflow-hidden">
-                    <motion.div className={`h-full ${cfg.bar} rounded-full`} initial={{ width: 0 }} animate={{ width: `${((card.AI_proof_score || 5) / 10) * 100}%` }} transition={{ duration: 0.8 }} />
-                  </div>
-
-                  <div className="flex flex-wrap gap-2 text-xs">
-                    <span className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-medium ${cfg.bg} ${cfg.color}`}>
-                      <AlertTriangle className="h-3 w-3" /> {card.risk_level || "Medium"} Risk
-                    </span>
-                    {card.growth_potential && <span className="flex items-center gap-1 bg-green-50 text-green-600 px-2.5 py-1 rounded-md font-medium"><TrendingUp className="h-3 w-3" /> {card.growth_potential} growth</span>}
-                    {card.time_horizon && <span className="flex items-center gap-1 bg-secondary px-2.5 py-1 rounded-md"><Zap className="h-3 w-3" /> {card.time_horizon}</span>}
-                  </div>
-
-                  {card.safe_skills?.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      <span className="text-[11px] text-muted-foreground">Human-proof skills:</span>
-                      {card.safe_skills.map((s, j) => <span key={j} className="text-[11px] bg-primary/10 text-primary px-2 py-0.5 rounded-md">{s}</span>)}
-                    </div>
-                  )}
-                </motion.div>
-              );
-            })}
-          </div>
-
-          {results.recommendation && (
-            <div className="bg-accent/10 border border-accent/20 rounded-xl p-4">
-              <p className="text-sm font-medium text-accent">💡 Recommendation</p>
-              <p className="text-sm text-muted-foreground mt-1">{results.recommendation}</p>
+      {guideText && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="bg-card border border-border rounded-2xl p-6 sm:p-8"
+        >
+          <SmartMarkdown text={guideText} />
+          {loading && !streamedText.includes("[ SCORECARDS ]") && (
+            <div className="flex items-center gap-2 mt-4 pt-4 border-t border-border">
+              <div className="h-2 w-2 rounded-full bg-primary animate-pulse" />
+              <span className="text-xs text-muted-foreground italic">writing...</span>
             </div>
           )}
         </motion.div>
       )}
 
-      {!loading && markdownFallback && !results && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-          <div className="bg-card border border-border rounded-xl p-6 prose prose-invert prose-sm max-w-none
-            prose-headings:text-foreground prose-headings:font-bold
-            prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2
-            prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1
-            prose-p:text-muted-foreground prose-p:my-1.5
-            prose-li:text-muted-foreground prose-li:my-0.5
-            prose-strong:text-foreground
-          ">
-            <ReactMarkdown>{markdownFallback}</ReactMarkdown>
+      {parsedItems.length > 0 && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-foreground">
+              🛡️ {parsedItems.length} specializations analyzed
+              {loading && <span className="text-primary italic"> (streaming...)</span>}
+            </p>
+            {loading && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
+          </div>
+          <div className="grid sm:grid-cols-2 gap-3">
+            {parsedItems.map((card, i) => (
+              <motion.button
+                key={i}
+                initial={{ opacity: 0, y: 15, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ duration: 0.3, delay: i * 0.03 }}
+                onClick={() => openCareerDetail(card.name)}
+                className="text-left bg-card border border-border rounded-xl p-4 hover:border-primary/50 hover:shadow-md transition-all group"
+              >
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <h3 className="font-heading font-bold text-base group-hover:text-primary transition-colors">{card.name}</h3>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-primary shrink-0 mt-0.5" />
+                </div>
+                <div className="space-y-1.5 text-xs">
+                  {card.score && (
+                    <p className="text-muted-foreground"><span className="font-medium text-foreground">AI Proof:</span> <span className="font-bold text-primary">{card.score}</span></p>
+                  )}
+                  {card.risk && (
+                    <p className="text-muted-foreground"><span className="font-medium text-foreground">Risk:</span> {card.risk}</p>
+                  )}
+                  {card.growth && (
+                    <p className="text-muted-foreground"><span className="font-medium text-foreground">Growth:</span> {card.growth}</p>
+                  )}
+                  {card.tags?.length > 0 && (
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {card.tags.map((tag, j) => (
+                        <span key={j} className="text-[10px] bg-secondary px-2 py-0.5 rounded-md font-medium">{tag}</span>
+                      ))}
+                    </div>
+                  )}
+                  {card.description && (
+                    <p className="text-muted-foreground line-clamp-2 pt-1">{card.description}</p>
+                  )}
+                </div>
+              </motion.button>
+            ))}
           </div>
         </motion.div>
       )}
     </div>
     </FeatureGate>
   );
+}
+
+function extractScorecardsFromMarker(text) {
+  const markerIdx = text.indexOf("[ SCORECARDS ]");
+  if (markerIdx === -1) return [];
+  const block = text.slice(markerIdx + "[ SCORECARDS ]".length);
+  const lines = block.split("\n").map(l => l.trim());
+  const items = [];
+  let current = null;
+  let paragraphs = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+    const isKey = /^(Stream|AI Proof Score|Risk Level|Growth Potential|Time Horizon|Key Reason|Safe Skills)\s*:/i.test(line);
+    const isBullet = line.startsWith("-") || line.startsWith("•") || /^\d+\./.test(line);
+
+    if (!isKey && !isBullet && line.length < 80 && !line.endsWith(".")) {
+      if (current && (current.score || current.risk)) {
+        current.description = paragraphs.join(" ").trim();
+        items.push(current);
+      }
+      current = { name: line, score: "", risk: "", growth: "", tags: [], description: "" };
+      paragraphs = [];
+      continue;
+    }
+    if (!current) continue;
+
+    const scoreMatch = line.match(/^AI Proof Score:\s*([^·]+?)(?:\s*·\s*Risk Level:\s*(.+))?$/i);
+    if (scoreMatch) {
+      current.score = scoreMatch[1].trim();
+      if (scoreMatch[2]) current.risk = scoreMatch[2].trim();
+      continue;
+    }
+
+    const growthMatch = line.match(/^Growth Potential:\s*([^·]+?)(?:\s*·\s*Time Horizon:\s*(.+))?$/i);
+    if (growthMatch) {
+      current.growth = growthMatch[1].trim();
+      if (growthMatch[2]) current.tags.push("⏱️ " + growthMatch[2].trim());
+      continue;
+    }
+
+    const reasonMatch = line.match(/^Key Reason:\s*(.+)/i);
+    if (reasonMatch) { current.tags.push("💡 " + reasonMatch[1].trim()); continue; }
+
+    const skillsMatch = line.match(/^Safe Skills:\s*(.+)/i);
+    if (skillsMatch) {
+      const skills = skillsMatch[1].split(",").map(s => s.trim()).slice(0, 3);
+      skills.forEach(s => current.tags.push("✓ " + s));
+      continue;
+    }
+
+    paragraphs.push(line);
+  }
+
+  if (current && (current.score || current.risk)) {
+    current.description = paragraphs.join(" ").trim();
+    items.push(current);
+  }
+  return items;
 }
